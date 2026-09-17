@@ -1,0 +1,14 @@
+# Servidor y API
+fastapi
+uvicorn
+
+# Orquestación de IA y Memoria
+langchain
+langchain-community
+
+# Bases de Datos
+sqlalchemy       # Para manejar SQLite fácilmente mediante código
+chromadb         # Para la base de datos vectorial del Universo (Lorebook)
+
+# Utilidades
+python-dotenv    # Para leer variables de entorno   

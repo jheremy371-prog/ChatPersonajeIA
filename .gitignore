@@ -1,0 +1,15 @@
+# Entornos virtuales
+backend/venv/
+backend/__pycache__/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Bases de datos locales (¡Importante no subir la BD con tus chats!)
+*.sqlite
+*.db
+backend/chroma_data/
+
+# Variables de entorno
+.env
