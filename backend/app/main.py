@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from fastapi import FastAPI, Depends, BackgroundTasks
+from fastapi import FastAPI, Depends, BackgroundTasks, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -11,6 +11,7 @@ from app.models import models
 from app.core.llm import crear_cadena_personaje, get_llm  
 from app.core.lorebook import agregar_entrada_lore, buscar_contexto 
 from app.agents.cronista import redactar_cronica
+from app.core.tavern import extraer_datos_personaje
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -47,6 +48,7 @@ class MensajeEdit(BaseModel):
     contenido: str
 
 class LoreRequest(BaseModel):
+    id_escena:int
     id_documento: str
     texto_lore: str
 
@@ -128,14 +130,13 @@ def eliminar_escena(id_escena: int, db: Session = Depends(get_db)):
 # --- ENDPOINTS CORE ---
 @app.post("/api/lore")
 def guardar_lore(req: LoreRequest):
-    agregar_entrada_lore(req.id_documento, req.texto_lore)
+    resultado = agregar_entrada_lore(req.id_documento, req.texto_lore, req.id_escena) 
     return {"estado": "éxito"}
 
 @app.post("/api/chat")
 def chat_con_personaje(req: MensajeTest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     llave_personaje = f"{req.personaje}_{req.id_escena}"
     
-    # [NUEVO] Si regeneramos, simplemente deshacemos el último turno en RAM en vez de borrar todo.
     if req.regenerar and llave_personaje in cadenas_activas:
         cadenas_activas[llave_personaje].deshacer_ultimo_turno()
 
@@ -143,13 +144,20 @@ def chat_con_personaje(req: MensajeTest, background_tasks: BackgroundTasks, db: 
         system_prompt = (
             f"Eres {req.personaje} del universo de '{req.universo}'. "
             f"Entorno: {req.tematica}. "
-            f"REGLA CANONICA: Asume por completo tu personalidad y habla en primera persona. "
-            f"IMPORTANTE: Si el usuario escribe texto entre asteriscos (*acción*) o corchetes ([acción]), NO es diálogo. "
-            f"Son HECHOS INMUTABLES o instrucciones del Director del juego. DEBES obedecerlas y adaptar tu narrativa a ellas obligatoriamente.\n"
+            "REGLAS CANÓNICAS ABSOLUTAS: "
+            "1. Eres este personaje y hablas en primera persona. Nunca admitas ser una IA ni hables en tercera persona sobre 'el personaje'. "
+            "2. Los textos entre asteriscos (*) o corchetes ([]) del jugador son HECHOS INMUTABLES. Ocurren sí o sí. Reacciona a ellos asumiéndolos en tu realidad de inmediato. "
+            "3. FORMATO ESTRICTO DE RESPUESTA (ESTILO EMOCHI): "
+            "   - Tu diálogo hablado SIEMPRE va primero, encerrado entre guiones (-). "
+            "   - Tus acciones físicas, emociones y la descripción del entorno van ABAJO del diálogo, en un nuevo párrafo, SIN guiones y SIN asteriscos. "
+            "   - NUNCA expliques tu formato. NUNCA uses metarrol ni frases como 'El personaje reacciona a la situación'. Limítate a actuar. "
+            "   - PIENSA Y RESPONDE SOLO EN ESPAÑOL.\n\n"
+            "EJEMPLO EXACTO DE CÓMO DEBES RESPONDER SIEMPRE A PARTIR DE AHORA:\n"
+            "-¡Maldición, la policía nos encontró! ¡Muévete rápido, no dejes que te atrapen!-\n\n"
+            "Mi respiración se acelera mientras corro detrás de ti, esquivando los escombros del escondite. Saco mi arma y miro de reojo la ventana, sintiendo el pánico en el pecho mientras los oficiales se acercan."
         )
         chain = crear_cadena_personaje(system_prompt)
         
-        # [NUEVO] Hidratación: Cargamos los últimos 8 mensajes de la DB a la RAM para evitar amnesia al reiniciar el servidor.
         historial_db = db.query(models.Mensaje).filter(models.Mensaje.id_escena == req.id_escena).order_by(models.Mensaje.id.desc()).limit(8).all()
         historial_db.reverse()
         for msg in historial_db:
@@ -161,14 +169,21 @@ def chat_con_personaje(req: MensajeTest, background_tasks: BackgroundTasks, db: 
         cadenas_activas[llave_personaje] = chain
     
     chain = cadenas_activas[llave_personaje]
-    contextos = buscar_contexto(req.mensaje)
+    contextos = buscar_contexto(req.mensaje, req.id_escena)
     
     inyeccion_memoria = f"\n\n[ESTADO DEL MUNDO ACTUAL:\n{req.memoria_rol}]" if req.memoria_rol else ""
     inyeccion_reglas = f"\n\n[REGLAS ABSOLUTAS:\n{req.detalles_extra}]" if req.detalles_extra else ""
     inyeccion_jugador = f"\n\n[IDENTIDAD DEL JUGADOR CON EL QUE HABLAS:\n{req.perfil_jugador}]" if req.perfil_jugador else ""
     inyeccion_lore = f"\n\n[LORE CONFIDENCIAL: {contextos[0]}]" if contextos else ""
     
-    mensaje_para_ia = req.mensaje + inyeccion_memoria + inyeccion_reglas + inyeccion_jugador + inyeccion_lore
+    recordatorio_formato = (
+        "\n\n[ORDEN DEL SISTEMA PARA ESTE TURNO: Responde EXCLUSIVAMENTE actuando la escena. "
+        "Primero tu diálogo entre guiones -...- seguido de tu narración. "
+        "TIENES ESTRICTAMENTE PROHIBIDO usar frases de metarrol como 'Esto es un hecho inmutable', "
+        "'El personaje reacciona', o explicar tu propio formato. Solo actúa.]"
+    )
+    
+    mensaje_para_ia = req.mensaje + inyeccion_memoria + inyeccion_reglas + inyeccion_jugador + inyeccion_lore + recordatorio_formato
     
     respuesta_ia = chain.predict(user_input=mensaje_para_ia, memoria_rol_actual=req.memoria_rol)
 
@@ -214,29 +229,27 @@ def sintetizar_memoria(req: SintetizarRequest, db: Session = Depends(get_db)):
     mensajes.reverse()
     historial_texto = "\n".join([f"{'Jugador' if m.id_emisor==0 else 'IA'}: {m.contenido}" for m in mensajes])
     llm = get_llm()
-    
-    prompt = f"""Eres un Notario de Continuidad para un juego de rol.
-REGLA ABSOLUTA: DEBES ESCRIBIR ÚNICA Y EXCLUSIVAMENTE EN ESPAÑOL. NO USES INGLÉS.
+    memoria_anterior = req.memoria_actual if req.memoria_actual.strip() else "[MISION ACTUAL]\n..."
 
-Tu tarea es analizar los siguientes mensajes recientes del chat y extraer SOLO lo nuevo.
-Redacta tu respuesta en el siguiente formato:
+    prompt = f"""Eres un Notario de Continuidad para un juego de rol. 
 
-[NUEVOS EVENTOS]
-- (Escribe aquí en español los cambios en el inventario, estado o progreso de la historia)
+INSTRUCCIONES ESTRICTAS:
+1. REGLA DE ORO: Copia y mantén INTACTO todo el texto, formato, reglas e identidad del "DOCUMENTO ACTUAL". No borres ni modifiques las instrucciones del sistema.
+2. Analiza los "ÚLTIMOS EVENTOS DEL CHAT" para detectar progresos de historia, nuevos objetos, o cambios en el entorno.
+3. Añade esa nueva información de forma estructurada DEBAJO del texto original.
+4. AL FINAL de tu respuesta, crea obligatoriamente una sección llamada [REGISTRO DE CAMBIOS] donde expliques en 1 o 2 líneas exactas qué información nueva acabas de añadir.
 
-[REGISTRO DE CAMBIOS]
-- (Explicación breve de lo que se actualizó)
+DOCUMENTO ACTUAL (¡NO BORRAR NI RESUMIR ESTE TEXTO!):
+{memoria_anterior}
 
 ÚLTIMOS EVENTOS DEL CHAT:
 {historial_texto}
 
-Redacta tu reporte en ESPAÑOL a continuación:"""
+Reescribe el documento cumpliendo las instrucciones y añadiendo el [REGISTRO DE CAMBIOS]:"""
 
     try:
         resultado = llm.invoke(prompt)
-        memoria_intacta = req.memoria_actual.strip()
-        nueva_memoria = f"{memoria_intacta}\n\n{resultado.content.strip()}"
-        return {"estado": "éxito", "nueva_memoria": nueva_memoria}
+        return {"estado": "éxito", "nueva_memoria": resultado.content.strip()}
     except Exception as e:
         return {"error": str(e)}
 
@@ -286,3 +299,30 @@ def exportar_escena(id_escena: int, db: Session = Depends(get_db)):
         "cronicas": [{"capitulo": c.titulo_capitulo, "contenido": c.contenido_narrativo} for c in cronicas]
     }
     return export_data
+
+# --- ENDPOINT DEL LECTOR DE TARJETAS TAVERN PNG ---
+@app.post("/api/tavern/leer_tarjeta")
+async def leer_tarjeta_tavern(archivo: UploadFile = File(...)):
+    if not archivo.filename.endswith('.png'):
+        return {"error": "El archivo debe ser un PNG."}
+        
+    ruta_temporal = f"temp_{archivo.filename}"
+    
+    try:
+        # Guardamos la imagen temporalmente para que PIL pueda leerla
+        contenido = await archivo.read()
+        with open(ruta_temporal, "wb") as f:
+            f.write(contenido)
+            
+        resultado = extraer_datos_personaje(ruta_temporal)
+        
+        # Borramos el archivo temporal
+        if os.path.exists(ruta_temporal):
+            os.remove(ruta_temporal)
+            
+        return resultado
+        
+    except Exception as e:
+        if os.path.exists(ruta_temporal):
+            os.remove(ruta_temporal)
+        return {"error": f"Ocurrió un error al procesar el archivo: {str(e)}"}
