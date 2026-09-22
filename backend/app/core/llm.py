@@ -1,9 +1,15 @@
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from app.core.config import settings
 
 def get_llm():
-    return ChatOllama(model="dolphin-llama3", temperature=0.8, num_ctx=2048, repeat_penalty=1.18)
+    return ChatOllama(
+        model=settings.OLLAMA_MODEL, 
+        temperature=settings.OLLAMA_TEMPERATURE, 
+        num_ctx=settings.OLLAMA_CTX_SIZE, 
+        repeat_penalty=settings.OLLAMA_REPEAT_PENALTY
+    )
 
 class PersonajeChain:
     def __init__(self, system_prompt_base: str):

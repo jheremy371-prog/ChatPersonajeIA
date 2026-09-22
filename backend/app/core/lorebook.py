@@ -1,6 +1,7 @@
 import chromadb
+from app.core.config import settings
 
-chroma_client = chromadb.PersistentClient(path="./chroma_db")
+chroma_client = chromadb.PersistentClient(path=settings.CHROMA_DB_PATH)
 collection = chroma_client.get_or_create_collection(name="lorebook")
 
 def agregar_entrada_lore(id_documento: str, texto_lore: str, id_escena: int):
