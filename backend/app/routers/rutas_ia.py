@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, BackgroundTasks, UploadFile, File
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage, AIMessage
+from fastapi.responses import StreamingResponse
 
 from app.database.database import SessionLocal
 from app.models import models
@@ -91,7 +92,6 @@ def chat_con_personaje(req: MensajeTest, background_tasks: BackgroundTasks, db: 
     inyeccion_jugador = f"\n\n[IDENTIDAD DEL JUGADOR CON EL QUE HABLAS:\n{req.perfil_jugador}]" if req.perfil_jugador else ""
     inyeccion_lore = f"\n\n[LORE CONFIDENCIAL: {texto_lore}]" if texto_lore else "" 
     
-    # 👇 NUEVAS REGLAS MAESTRAS DE INTERPRETACIÓN PARA LA IA
     recordatorio_formato = (
         "\n\n[REGLAS MAESTRAS DEL MOTOR DE ROL (DE CUMPLIMIENTO OBLIGATORIO):\n"
         "1. LECTURA DEL JUGADOR: El jugador mezclará palabras habladas y acciones físicas. Las acciones físicas y gestos del jugador suelen ir entre asteriscos (*...*). DEBES analizar y reaccionar obligatoriamente a estas acciones de forma realista.\n"
@@ -102,24 +102,62 @@ def chat_con_personaje(req: MensajeTest, background_tasks: BackgroundTasks, db: 
     
     mensaje_para_ia = req.mensaje + inyeccion_memoria + inyeccion_reglas + inyeccion_jugador + inyeccion_lore + recordatorio_formato
     
-    respuesta_ia = chain.predict(user_input=mensaje_para_ia, memoria_rol_actual=req.memoria_rol)
-
+    # 👇 A PARTIR DE AQUÍ INICIA LA LÓGICA DE STREAMING 👇
+    
+    # 1. Guardamos el mensaje del JUGADOR de inmediato antes de procesar la IA
     if not req.regenerar:
         msg_usuario = models.Mensaje(id_escena=req.id_escena, id_emisor=0, contenido=req.mensaje)
         db.add(msg_usuario)
-        
-    texto_para_db = f"[FUENTE_LORE:{fuente_lore}]\n{respuesta_ia}" if fuente_lore else respuesta_ia
-    
-    msg_ia = models.Mensaje(id_escena=req.id_escena, id_emisor=1, contenido=texto_para_db)
-    db.add(msg_ia)
-    db.commit()
+        db.commit()
 
-    background_tasks.add_task(redactar_cronica, req.mensaje, respuesta_ia, req.personaje, req.id_escena)
-    
-    return {
-        "respuesta": respuesta_ia,
-        "fuente_lore": fuente_lore 
-    }
+    # 2. Definimos el Generador de Streaming SSE
+    def generador_streaming():
+        respuesta_completa = ""
+        
+        # A. Emitimos la etiqueta del Lorebook primero si existe
+        if fuente_lore:
+            yield f"data: {json.dumps({'tipo': 'lore', 'fuente_lore': fuente_lore})}\n\n"
+
+        try:
+            # B. Transmitimos fragmento por fragmento (token por token)
+            for chunk in chain.stream({"user_input": mensaje_para_ia, "memoria_rol_actual": req.memoria_rol}):
+                
+                # LangChain devuelve diferentes estructuras dependiendo del modelo, esto lo estandariza:
+                texto_fragmento = ""
+                if isinstance(chunk, str):
+                    texto_fragmento = chunk
+                elif isinstance(chunk, dict) and "text" in chunk:
+                    texto_fragmento = chunk["text"]
+                elif hasattr(chunk, "content"):
+                    texto_fragmento = chunk.content
+                
+                if texto_fragmento:
+                    respuesta_completa += texto_fragmento
+                    yield f"data: {json.dumps({'tipo': 'chunk', 'texto': texto_fragmento})}\n\n"
+                    
+        except Exception as e:
+            print(f"⚠️ Error en streaming: {e}")
+            yield f"data: {json.dumps({'tipo': 'error', 'mensaje': 'Se cortó la conexión con Ollama.'})}\n\n"
+
+        # C. Al terminar de hablar, guardamos todo en SQLite
+        texto_para_db = f"[FUENTE_LORE:{fuente_lore}]\n{respuesta_completa}" if fuente_lore else respuesta_completa
+        msg_ia = models.Mensaje(id_escena=req.id_escena, id_emisor=1, contenido=texto_para_db)
+        db.add(msg_ia)
+        db.commit()
+
+        # D. Ejecutamos el agente Cronista síncronamente tras guardar
+        try:
+            redactar_cronica(req.mensaje, respuesta_completa, req.personaje, req.id_escena)
+        except Exception as e:
+            print(f"⚠️ Error al redactar crónica en streaming: {e}")
+
+        # E. Señal de finalización para el Frontend
+        yield "data: [DONE]\n\n"
+
+    # 3. Retornamos la respuesta tipo Event-Stream
+    return StreamingResponse(generador_streaming(), media_type="text/event-stream")
+
+# ... (EL RESTO DE TUS ENDPOINTS SIGUEN EXACTAMENTE IGUAL) ...
 
 @router.get("/api/chat/historial/{id_escena}")
 def obtener_historial(id_escena: int, db: Session = Depends(get_db)):

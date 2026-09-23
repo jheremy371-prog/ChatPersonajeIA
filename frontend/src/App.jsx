@@ -244,6 +244,8 @@ function App() {
     setMensaje(comando);
   };
 
+
+  // 👇 LÓGICA DE STREAMING INTEGRADA 👇
   const enviarMensaje = async (e) => {
     e.preventDefault();
     if (!mensaje.trim() || !escenaActiva) return;
@@ -251,8 +253,12 @@ function App() {
     const textoActual = mensaje;
     const textoVisual = textoActual.startsWith("[ACCION DEL SISTEMA") ? "*(Convoca entidad)* " + textoActual.split("] ")[1] : textoActual;
     
-    // Mostramos el mensaje temporalmente en la pantalla
-    setMensajes((prev) => [...prev, { emisor: 'Jugador', contenido: textoVisual || textoActual }]);
+    // 1. Mostrar tu mensaje inmediatamente y preparar una burbuja vacía para la IA
+    setMensajes((prev) => [
+      ...prev, 
+      { id: Date.now(), emisor: 'Jugador', contenido: textoVisual || textoActual },
+      { id: 'temp-ia', emisor: 'IA', contenido: '' }
+    ]);
     setMensaje('');
 
     try {
@@ -265,29 +271,80 @@ function App() {
         }),
       });
       
-      const data = await res.json();
-      
-      // ESCUDO: Si el backend envía un error, lo atrapamos
-      if (!res.ok || data.error) {
-        alert(data.error || "Ocurrió un error desconocido en el servidor.");
-        setMensajes((prev) => prev.slice(0, -1)); // Retiramos el mensaje fallido del chat
-        setMensaje(textoActual); // Te devolvemos el texto al input para que no lo pierdas
-      } else {
-        seleccionarEscena(escenaActiva); // Todo salió bien, recargamos
+      if (!res.ok) {
+        alert("Ocurrió un error en el servidor.");
+        setMensajes((prev) => prev.slice(0, -2)); 
+        setMensaje(textoActual); 
+        return;
       }
+
+      // 2. Consumir el flujo (Stream) de datos
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let aiText = '';
+      let currentLore = null;
+      let buffer = ''; // Buffer para evitar romper JSON a medias
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // Guarda la última línea si está incompleta
+        
+        for (let line of lines) {
+          if (line.trim() === '') continue;
+          if (line.startsWith('data: ')) {
+            const dataStr = line.slice(6).trim();
+            
+            if (dataStr === '[DONE]') {
+              break; 
+            }
+            
+            try {
+              const dataObj = JSON.parse(dataStr);
+              if (dataObj.tipo === 'chunk') {
+                aiText += dataObj.texto;
+                // Escribir letra por letra actualizando el último mensaje (el de la IA)
+                setMensajes(prev => {
+                  const copia = [...prev];
+                  const loreTag = currentLore ? `[FUENTE_LORE:${currentLore}]\n` : '';
+                  copia[copia.length - 1] = { ...copia[copia.length - 1], contenido: loreTag + aiText };
+                  return copia;
+                });
+              } else if (dataObj.tipo === 'lore') {
+                currentLore = dataObj.fuente_lore; // Guardamos el nombre para dibujar la etiqueta
+              } else if (dataObj.tipo === 'error') {
+                alert(dataObj.mensaje);
+              }
+            } catch (err) {
+              // Ignorar silenciosamente líneas JSON malformadas a la mitad
+            }
+          }
+        }
+      }
+
+      // 3. Todo terminó, recargamos la escena para obtener los IDs reales guardados por SQLite
+      seleccionarEscena(escenaActiva);
+
     } catch (error) { 
-      // ESCUDO: Si Python está completamente apagado y ni siquiera responde
-      alert("⚠️ No hay conexión con el servidor. ¿Está encendida la terminal de Python?");
-      setMensajes((prev) => prev.slice(0, -1)); 
+      alert("⚠️ No hay conexión con el servidor.");
+      setMensajes((prev) => prev.slice(0, -2)); 
       setMensaje(textoActual);
     } finally { 
-      setCargando(false); // Apagamos la animación sin importar lo que pase
+      setCargando(false); 
     }
   };
 
+  // 👇 MISMA LÓGICA DE STREAMING PARA REGENERAR RESPUESTAS 👇
   const regenerarRespuesta = async (ultimoTextoUsuario) => {
     if (!escenaActiva) return;
     setCargando(true);
+    
+    // Creamos la burbuja vacía
+    setMensajes((prev) => [...prev, { id: 'temp-ia-regen', emisor: 'IA', contenido: '' }]);
+
     try {
       const res = await fetch(`${API_URL}/api/chat`, {
         method: 'POST',
@@ -298,15 +355,55 @@ function App() {
         }),
       });
       
-      const data = await res.json();
-      
-      if (!res.ok || data.error) {
-        alert(data.error || "Error al intentar crear una línea temporal alternativa.");
-      } else {
-        seleccionarEscena(escenaActiva); 
+      if (!res.ok) {
+        alert("Error al intentar crear una línea temporal alternativa.");
+        setMensajes((prev) => prev.slice(0, -1));
+        return;
       }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let aiText = '';
+      let currentLore = null;
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        
+        for (let line of lines) {
+          if (line.trim() === '') continue;
+          if (line.startsWith('data: ')) {
+            const dataStr = line.slice(6).trim();
+            if (dataStr === '[DONE]') break;
+            
+            try {
+              const dataObj = JSON.parse(dataStr);
+              if (dataObj.tipo === 'chunk') {
+                aiText += dataObj.texto;
+                setMensajes(prev => {
+                  const copia = [...prev];
+                  const loreTag = currentLore ? `[FUENTE_LORE:${currentLore}]\n` : '';
+                  copia[copia.length - 1] = { ...copia[copia.length - 1], contenido: loreTag + aiText };
+                  return copia;
+                });
+              } else if (dataObj.tipo === 'lore') {
+                currentLore = dataObj.fuente_lore;
+              }
+            } catch (err) {}
+          }
+        }
+      }
+      
+      seleccionarEscena(escenaActiva);
+
     } catch (error) { 
-      alert("⚠️ No hay conexión con el servidor. ¿Está encendida la terminal de Python?");
+      alert("⚠️ No hay conexión con el servidor.");
+      setMensajes((prev) => prev.slice(0, -1));
     } finally { 
       setCargando(false); 
     }
@@ -428,14 +525,16 @@ function App() {
                 );
               }
             })}
-            {cargando && (
+            
+            {/* Animación de Pensando (Solo aparece un instante antes de que lleguen las letras) */}
+            {cargando && mensajes.length > 0 && mensajes[mensajes.length - 1].emisor === 'Jugador' && (
                <div className="self-start flex items-center gap-3 bg-slate-800/50 p-3 rounded-2xl rounded-tl-sm border border-slate-700">
                   <div className="flex gap-1">
                     <div className="w-2 h-2 bg-sky-500 rounded-full animate-bounce"></div>
                     <div className="w-2 h-2 bg-sky-500 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
                     <div className="w-2 h-2 bg-sky-500 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
                   </div>
-                  <span className="text-xs text-sky-400">Pensando...</span>
+                  <span className="text-xs text-sky-400">Escuchando a la IA...</span>
                </div>
             )}
           </div>
