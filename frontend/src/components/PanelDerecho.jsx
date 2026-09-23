@@ -1,3 +1,6 @@
+import { useState } from 'react';
+import LorebookModal from './LorebookModal';
+
 export default function PanelDerecho({
   pestañaDerecha, setPestañaDerecha,
   memoriaRol, setMemoriaRol, actualizandoMemoria, autoActualizarMemoria, escenaActiva,
@@ -5,6 +8,9 @@ export default function PanelDerecho({
   cargarCronicas, cronicas,
   loreTitulo, setLoreTitulo, loreTexto, setLoreTexto, guardarLorebook
 }) {
+  // Estado local para controlar si la ventana emergente está abierta o cerrada
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
   return (
     <div className="w-80 bg-slate-900 border-l border-slate-800 flex flex-col shadow-xl z-10">
       <div className="flex bg-slate-950 p-2 gap-1 border-b border-slate-800">
@@ -75,21 +81,39 @@ export default function PanelDerecho({
           </div>
         )}
 
+        {/* 👇 LA NUEVA PESTAÑA LORE CON EL BOTÓN CENTRAL 👇 */}
         {pestañaDerecha === 'lore' && (
-          <div className="flex flex-col h-full">
-            <span className="text-xs font-bold text-fuchsia-500 uppercase tracking-wider block mb-2">// Inyección Vectorial</span>
-            <p className="text-[10px] text-slate-500 mb-4 leading-relaxed">Añade reglas del universo, manuales o historia antigua. La IA buscará estos datos automáticamente cuando se mencionen.</p>
-            
-            <div className="flex flex-col gap-3">
-              <input type="text" placeholder="Concepto (Ej: Sistema de Magia)" value={loreTitulo} onChange={(e) => setLoreTitulo(e.target.value)} className="w-full p-2.5 bg-slate-950 text-fuchsia-200 border border-fuchsia-900/30 rounded-lg text-xs focus:ring-1 focus:ring-fuchsia-500 outline-none" />
-              <textarea placeholder="Pega aquí el contenido extenso..." value={loreTexto} onChange={(e) => setLoreTexto(e.target.value)} rows="12" className="w-full p-3 bg-slate-950 text-fuchsia-200 border border-fuchsia-900/30 rounded-lg text-xs focus:ring-1 focus:ring-fuchsia-500 outline-none resize-y leading-relaxed" />
-              <button onClick={guardarLorebook} className="w-full py-2.5 bg-fuchsia-600/20 hover:bg-fuchsia-600/30 text-fuchsia-400 border border-fuchsia-500/50 rounded-lg text-xs font-bold transition-all shadow-md">
-                &gt;_ VECTORIZAR
-              </button>
+          <div className="flex flex-col items-center justify-center h-full text-center gap-5">
+            <div className="w-16 h-16 bg-fuchsia-900/30 rounded-full flex items-center justify-center border border-fuchsia-500/30 shadow-[0_0_20px_rgba(217,70,239,0.15)]">
+              <span className="text-3xl">🔮</span>
             </div>
+            <div>
+              <span className="text-sm font-bold text-fuchsia-400 uppercase tracking-wider block mb-2">El Lorebook</span>
+              <p className="text-xs text-slate-400 leading-relaxed px-2">
+                El conocimiento del mundo ahora reside en el espacio vectorial. Abre la biblioteca para gestionar e inyectar nuevas reglas.
+              </p>
+            </div>
+            
+            <button 
+              onClick={() => setIsModalOpen(true)} 
+              className="mt-2 w-full py-3.5 bg-gradient-to-r from-fuchsia-700 to-purple-600 hover:from-fuchsia-600 hover:to-purple-500 text-white rounded-lg text-xs font-bold shadow-lg shadow-fuchsia-900/30 transition-all flex items-center justify-center gap-2"
+            >
+              <span>📖</span> ABRIR BIBLIOTECA
+            </button>
           </div>
         )}
       </div>
+
+      {/* 👇 EL MODAL FLOTANTE RENDERIZADO FUERA DEL FLUJO 👇 */}
+      <LorebookModal 
+        isOpen={isModalOpen} 
+        onClose={() => setIsModalOpen(false)} 
+        loreTitulo={loreTitulo} 
+        setLoreTitulo={setLoreTitulo} 
+        loreTexto={loreTexto} 
+        setLoreTexto={setLoreTexto} 
+        guardarLorebook={guardarLorebook} 
+      />
     </div>
   );
 }

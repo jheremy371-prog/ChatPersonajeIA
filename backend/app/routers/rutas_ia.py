@@ -83,16 +83,21 @@ def chat_con_personaje(req: MensajeTest, background_tasks: BackgroundTasks, db: 
     chain = cadenas_activas[llave_personaje]
     contextos = buscar_contexto(req.mensaje, req.id_escena)
     
+    texto_lore = contextos[0]["texto"] if contextos else ""
+    fuente_lore = contextos[0]["fuente"] if contextos else None
+    
     inyeccion_memoria = f"\n\n[ESTADO DEL MUNDO ACTUAL:\n{req.memoria_rol}]" if req.memoria_rol else ""
     inyeccion_reglas = f"\n\n[REGLAS ABSOLUTAS:\n{req.detalles_extra}]" if req.detalles_extra else ""
     inyeccion_jugador = f"\n\n[IDENTIDAD DEL JUGADOR CON EL QUE HABLAS:\n{req.perfil_jugador}]" if req.perfil_jugador else ""
-    inyeccion_lore = f"\n\n[LORE CONFIDENCIAL: {contextos[0]}]" if contextos else ""
+    inyeccion_lore = f"\n\n[LORE CONFIDENCIAL: {texto_lore}]" if texto_lore else "" 
     
+    # 👇 NUEVAS REGLAS MAESTRAS DE INTERPRETACIÓN PARA LA IA
     recordatorio_formato = (
-        "\n\n[ORDEN DEL SISTEMA PARA ESTE TURNO: Responde EXCLUSIVAMENTE actuando la escena. "
-        "Primero tu diálogo entre guiones -...- seguido de tu narración. "
-        "TIENES ESTRICTAMENTE PROHIBIDO usar frases de metarrol como 'Esto es un hecho inmutable', "
-        "'El personaje reacciona', o explicar tu propio formato. Solo actúa.]"
+        "\n\n[REGLAS MAESTRAS DEL MOTOR DE ROL (DE CUMPLIMIENTO OBLIGATORIO):\n"
+        "1. LECTURA DEL JUGADOR: El jugador mezclará palabras habladas y acciones físicas. Las acciones físicas y gestos del jugador suelen ir entre asteriscos (*...*). DEBES analizar y reaccionar obligatoriamente a estas acciones de forma realista.\n"
+        "2. TU FORMATO DE RESPUESTA: Responde EXCLUSIVAMENTE actuando la escena. Escribe tus diálogos entre guiones largos (—...—) y describe tus acciones en tercera persona.\n"
+        "3. AUTONOMÍA ESTRICTA: Tienes ESTRICTAMENTE PROHIBIDO narrar los sentimientos, acciones, reacciones o diálogos del jugador. Solo tienes permitido controlar y describir a TU personaje.\n"
+        "4. CERO METARROL: No uses frases como 'Esto es un hecho inmutable', ni des explicaciones de tus acciones como si fueras una IA. Solo actúa.]"
     )
     
     mensaje_para_ia = req.mensaje + inyeccion_memoria + inyeccion_reglas + inyeccion_jugador + inyeccion_lore + recordatorio_formato
@@ -103,12 +108,18 @@ def chat_con_personaje(req: MensajeTest, background_tasks: BackgroundTasks, db: 
         msg_usuario = models.Mensaje(id_escena=req.id_escena, id_emisor=0, contenido=req.mensaje)
         db.add(msg_usuario)
         
-    msg_ia = models.Mensaje(id_escena=req.id_escena, id_emisor=1, contenido=respuesta_ia)
+    texto_para_db = f"[FUENTE_LORE:{fuente_lore}]\n{respuesta_ia}" if fuente_lore else respuesta_ia
+    
+    msg_ia = models.Mensaje(id_escena=req.id_escena, id_emisor=1, contenido=texto_para_db)
     db.add(msg_ia)
     db.commit()
 
     background_tasks.add_task(redactar_cronica, req.mensaje, respuesta_ia, req.personaje, req.id_escena)
-    return {"respuesta": respuesta_ia}
+    
+    return {
+        "respuesta": respuesta_ia,
+        "fuente_lore": fuente_lore 
+    }
 
 @router.get("/api/chat/historial/{id_escena}")
 def obtener_historial(id_escena: int, db: Session = Depends(get_db)):

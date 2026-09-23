@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from datetime import datetime
@@ -6,6 +6,9 @@ from datetime import datetime
 from app.database.database import SessionLocal
 from app.models import models
 from app.core.lorebook import agregar_entrada_lore
+
+# 👇 Importamos la memoria RAM viva de LangChain para poder limpiarla
+from app.routers.rutas_ia import cadenas_activas 
 
 router = APIRouter()
 
@@ -30,6 +33,8 @@ class LoreRequest(BaseModel):
     id_escena: int
     id_documento: str
     texto_lore: str
+class MensajeUpdate(BaseModel):
+    contenido: str
 
 # --- ENDPOINTS DE ESCENAS ---
 @router.get("/api/escenas")
@@ -64,12 +69,57 @@ def renombrar_escena(id_escena: int, req: EscenaUpdate, db: Session = Depends(ge
 def eliminar_escena(id_escena: int, db: Session = Depends(get_db)):
     escena = db.query(models.Escena).filter(models.Escena.id == id_escena).first()
     if not escena: return {"error": "Escena no encontrada"}
+    
     db.query(models.Mensaje).filter(models.Mensaje.id_escena == id_escena).delete()
     db.query(models.Entidad).filter(models.Entidad.id_escena == id_escena).delete()
     db.query(models.CronicaHistoria).filter(models.CronicaHistoria.id_escena == id_escena).delete()
     db.delete(escena)
     db.commit()
+    
+    # 🧹 ELIMINADOR DE FANTASMAS EN RAM (Aventura Completa)
+    llave = f"escena_{id_escena}"
+    if llave in cadenas_activas:
+        del cadenas_activas[llave]
+
     return {"estado": "éxito"}
+
+
+# --- ENDPOINTS DE MENSAJES (NUEVOS) ---
+@router.delete("/api/mensajes/{id_mensaje}")
+def eliminar_mensaje(id_mensaje: int, db: Session = Depends(get_db)):
+    mensaje = db.query(models.Mensaje).filter(models.Mensaje.id == id_mensaje).first()
+    if not mensaje:
+        raise HTTPException(status_code=404, detail="Mensaje no encontrado")
+        
+    id_escena = mensaje.id_escena 
+    
+    db.delete(mensaje)
+    db.commit()
+
+    # 🧹 ELIMINADOR DE FANTASMAS EN RAM (Mensaje Individual)
+    llave = f"escena_{id_escena}"
+    if llave in cadenas_activas:
+        del cadenas_activas[llave] # Obliga a LangChain a olvidar y recargar desde SQLite
+
+    return {"estado": "éxito", "detalle": "Mensaje y caché eliminados"}
+
+@router.put("/api/mensajes/{id_mensaje}")
+def editar_mensaje(id_mensaje: int, req: MensajeUpdate, db: Session = Depends(get_db)):
+    mensaje = db.query(models.Mensaje).filter(models.Mensaje.id == id_mensaje).first()
+    if not mensaje:
+        raise HTTPException(status_code=404, detail="Mensaje no encontrado")
+    
+    mensaje.contenido = req.contenido
+    id_escena = mensaje.id_escena
+    db.commit()
+
+    # 🧹 ELIMINADOR DE FANTASMAS EN RAM (Al editar también reseteamos memoria)
+    llave = f"escena_{id_escena}"
+    if llave in cadenas_activas:
+        del cadenas_activas[llave] 
+        
+    return {"estado": "éxito"}
+
 
 # --- ENDPOINTS DE LORE Y COMPENDIO ---
 @router.post("/api/entidades")
@@ -88,6 +138,7 @@ def obtener_entidades(id_escena: int, db: Session = Depends(get_db)):
 def guardar_lore(req: LoreRequest):
     agregar_entrada_lore(req.id_documento, req.texto_lore, req.id_escena) 
     return {"estado": "éxito"}
+
 
 # --- ENDPOINTS DE LECTURA Y BACKUP ---
 @router.get("/api/cronicas/{id_escena}")

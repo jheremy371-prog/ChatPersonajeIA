@@ -49,42 +49,39 @@ def agregar_entrada_lore(id_documento: str, texto_lore: str, id_escena: int):
 
 @lru_cache(maxsize=128)
 def buscar_contexto_cacheado(query_limpio: str, id_escena: int, max_distancia: float = 1.1):
-    """
-    Consulta optimizada con caché en memoria (LRU) y filtro estricto por metadatos (id_escena)[cite: 3, 4].
-    """
+    """Consulta optimizada con caché en memoria y filtro por umbral de similitud."""
     try:
         resultados = collection.query(
             query_texts=[query_limpio],
             n_results=1,
-            where={"id_escena": id_escena},  # Nota: Filtro estricto para que no se cruze información entre universos[cite: 3, 4]
-            include=["documents", "distances"]
+            where={"id_escena": id_escena},
+            # 👈 AÑADIMOS "ids" PARA RECUPERAR EL NOMBRE DEL DOCUMENTO
+            include=["documents", "distances", "ids"] 
         )
         
         if resultados and resultados.get('documents') and resultados['documents']:
             distancia = resultados['distances'][0][0]
             documento = resultados['documents'][0][0]
+            id_crudo = resultados['ids'][0][0] # Ej: "999_test_dragon"
             
-            # Nota: Control de umbral. Solo inyecta el contexto si la similitud matemática supera el filtro de distancia[cite: 3, 4]
+            # Limpiamos el ID (quitamos el prefijo de la escena para que quede solo el título)
+            nombre_doc = id_crudo.split('_', 1)[1] if '_' in id_crudo else id_crudo
+            
             if distancia <= max_distancia:
-                return documento
+                # 👈 AHORA DEVOLVEMOS UN DICCIONARIO
+                return {"texto": documento, "fuente": nombre_doc} 
         return None
     except Exception as e:
         print(f"⚠️ Error al buscar en ChromaDB: {e}")
         return None
 
 def buscar_contexto(query: str, id_escena: int):
-    """
-    Punto de entrada principal utilizado por el servidor principal (main.py)[cite: 5, 6].
-    """
-    # Nota: Validamos que la consulta tenga la longitud mínima para evitar búsquedas vacías o irrelevantes[cite: 5, 6]
+    """Punto de entrada principal utilizado por main.py."""
     if not query or len(query.strip()) < 3:
         return []
         
-    # Paso 1: Sanitizamos el texto eliminando acotaciones de rol[cite: 3, 4, 5, 6]
     query_sanitizado = limpiar_query(query)
-    
-    # Paso 2: Ejecutamos la búsqueda aprovechando el sistema de caché y filtrado[cite: 3, 4, 5, 6]
     resultado = buscar_contexto_cacheado(query_sanitizado, id_escena)
     
-    # Paso 3: Retornamos el resultado en formato de lista para que el LLM lo pueda procesar correctamente[cite: 5, 6]
+    # Retorna una lista con el diccionario adentro
     return [resultado] if resultado else []
