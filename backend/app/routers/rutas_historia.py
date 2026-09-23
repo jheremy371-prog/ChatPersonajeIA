@@ -163,3 +163,46 @@ def exportar_escena(id_escena: int, db: Session = Depends(get_db)):
         "cronicas": [{"capitulo": c.titulo_capitulo, "contenido": c.contenido_narrativo} for c in cronicas]
     }
     return export_data
+
+# --- ENDPOINT DE MULTIVERSO (BIFURCACIÓN TEMPORAL) ---
+@router.post("/api/escenas/{id_escena}/clonar/{id_mensaje}")
+def clonar_linea_temporal(id_escena: int, id_mensaje: int, db: Session = Depends(get_db)):
+    # 1. Buscar la escena original
+    escena_orig = db.query(models.Escena).filter(models.Escena.id == id_escena).first()
+    if not escena_orig:
+        raise HTTPException(status_code=404, detail="Escena no encontrada")
+
+    # 2. Crear la nueva escena paralela
+    nueva_escena = models.Escena(
+        nombre_escena=f"{escena_orig.nombre_escena} (Bifurcación)",
+        estado="activa",
+        contexto_inicial=escena_orig.contexto_inicial
+    )
+    db.add(nueva_escena)
+    db.commit()
+    db.refresh(nueva_escena)
+
+    # 3. Clonar los mensajes HASTA el mensaje seleccionado (inclusive)
+    mensajes = db.query(models.Mensaje).filter(
+        models.Mensaje.id_escena == id_escena, 
+        models.Mensaje.id <= id_mensaje
+    ).order_by(models.Mensaje.id.asc()).all()
+    
+    for m in mensajes:
+        nuevo_msg = models.Mensaje(id_escena=nueva_escena.id, id_emisor=m.id_emisor, contenido=m.contenido)
+        db.add(nuevo_msg)
+
+    # 4. Clonar el Compendio (Entidades)
+    entidades = db.query(models.Entidad).filter(models.Entidad.id_escena == id_escena).all()
+    for e in entidades:
+        nueva_ent = models.Entidad(id_escena=nueva_escena.id, nombre=e.nombre, tipo=e.tipo, descripcion=e.descripcion)
+        db.add(nueva_ent)
+
+    # 5. Clonar las Crónicas
+    cronicas = db.query(models.CronicaHistoria).filter(models.CronicaHistoria.id_escena == id_escena).all()
+    for c in cronicas:
+        nueva_cro = models.CronicaHistoria(id_escena=nueva_escena.id, titulo_capitulo=c.titulo_capitulo, contenido_narrativo=c.contenido_narrativo)
+        db.add(nueva_cro)
+
+    db.commit()
+    return {"estado": "éxito", "nueva_escena_id": nueva_escena.id}

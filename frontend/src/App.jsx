@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { GrupoIA, MensajeUsuario } from './components/Mensajes';
 import Sidebar from './components/Sidebar';
 import PanelDerecho from './components/PanelDerecho';
@@ -30,6 +30,18 @@ function App() {
   const [pestañaDerecha, setPestañaDerecha] = useState('memoria'); 
   const [loreTitulo, setLoreTitulo] = useState('');
   const [loreTexto, setLoreTexto] = useState('');
+
+  // 👇 1. REFERENCIA PARA EL AUTO-SCROLL INTELIGENTE 👇
+  const mensajesEndRef = useRef(null);
+
+  const scrollToBottom = () => {
+    mensajesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [mensajes]); // Cada vez que los mensajes cambien (incluso letra por letra), baja la pantalla.
+  // ----------------------------------------------------
 
   const cargarEscenas = async () => {
     const res = await fetch(`${API_URL}/api/escenas`);
@@ -168,6 +180,21 @@ function App() {
     seleccionarEscena(escenaActiva); 
   };
 
+  // 👇 FUNCIÓN AÑADIDA: BIFURCACIÓN DE LÍNEA TEMPORAL 👇
+  const clonarLineaTemporal = async (id_mensaje) => {
+    if (!window.confirm("🌌 ¿Crear una línea temporal alternativa desde este punto? Esto clonará la aventura en una nueva partida.")) return;
+    try {
+      const res = await fetch(`${API_URL}/api/escenas/${escenaActiva}/clonar/${id_mensaje}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.nueva_escena_id) {
+        await cargarEscenas(); 
+        seleccionarEscena(data.nueva_escena_id); 
+      }
+    } catch (error) {
+      alert("Error al bifurcar la línea temporal.");
+    }
+  };
+
   const guardarEdicion = async (id_mensaje, nuevoTexto) => {
     await fetch(`${API_URL}/api/mensajes/${id_mensaje}`, {
       method: 'PUT',
@@ -245,28 +272,42 @@ function App() {
   };
 
 
-  // 👇 LÓGICA DE STREAMING INTEGRADA 👇
   const enviarMensaje = async (e) => {
     e.preventDefault();
     if (!mensaje.trim() || !escenaActiva) return;
     setCargando(true);
-    const textoActual = mensaje;
-    const textoVisual = textoActual.startsWith("[ACCION DEL SISTEMA") ? "*(Convoca entidad)* " + textoActual.split("] ")[1] : textoActual;
     
-    // 1. Mostrar tu mensaje inmediatamente y preparar una burbuja vacía para la IA
+    // 👇 2. INTERCEPTOR DE COMANDOS SLASH 👇
+    let textoAEnviar = mensaje.trim();
+    const cmdCheck = textoAEnviar.toLowerCase();
+    
+    if (cmdCheck.startsWith('/orden ')) {
+      textoAEnviar = `[DIRECTOR: ] ${textoAEnviar.substring(7).trim()}`;
+    } else if (cmdCheck.startsWith('/forzar ')) {
+      textoAEnviar = `[HECHO INMUTABLE: ] ${textoAEnviar.substring(8).trim()}`;
+    } else if (cmdCheck.startsWith('/accion ')) {
+      // Envolvemos mágicamente la acción en asteriscos
+      textoAEnviar = `*${textoAEnviar.substring(8).trim()}*`; 
+    }
+    // ------------------------------------------------
+    
+    const textoVisual = textoAEnviar.startsWith("[ACCION DEL SISTEMA") ? "*(Convoca entidad)* " + textoAEnviar.split("] ")[1] : textoAEnviar;
+    
+    // Usamos el texto modificado
     setMensajes((prev) => [
       ...prev, 
-      { id: Date.now(), emisor: 'Jugador', contenido: textoVisual || textoActual },
+      { id: Date.now(), emisor: 'Jugador', contenido: textoVisual },
       { id: 'temp-ia', emisor: 'IA', contenido: '' }
     ]);
-    setMensaje('');
+    setMensaje(''); // Limpiamos el input
 
     try {
       const res = await fetch(`${API_URL}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          mensaje: textoActual, personaje, universo, tematica, detalles_extra: detallesExtra, 
+          mensaje: textoAEnviar, // Enviamos el texto parseado al backend
+          personaje, universo, tematica, detalles_extra: detallesExtra, 
           memoria_rol: memoriaRol, perfil_jugador: perfilJugador, id_escena: escenaActiva, regenerar: false
         }),
       });
@@ -274,16 +315,15 @@ function App() {
       if (!res.ok) {
         alert("Ocurrió un error en el servidor.");
         setMensajes((prev) => prev.slice(0, -2)); 
-        setMensaje(textoActual); 
+        setMensaje(mensaje); // Devolvemos el mensaje original al input en caso de error
         return;
       }
 
-      // 2. Consumir el flujo (Stream) de datos
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let aiText = '';
       let currentLore = null;
-      let buffer = ''; // Buffer para evitar romper JSON a medias
+      let buffer = ''; 
 
       while (true) {
         const { value, done } = await reader.read();
@@ -291,22 +331,18 @@ function App() {
         
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
-        buffer = lines.pop(); // Guarda la última línea si está incompleta
+        buffer = lines.pop(); 
         
         for (let line of lines) {
           if (line.trim() === '') continue;
           if (line.startsWith('data: ')) {
             const dataStr = line.slice(6).trim();
-            
-            if (dataStr === '[DONE]') {
-              break; 
-            }
+            if (dataStr === '[DONE]') break; 
             
             try {
               const dataObj = JSON.parse(dataStr);
               if (dataObj.tipo === 'chunk') {
                 aiText += dataObj.texto;
-                // Escribir letra por letra actualizando el último mensaje (el de la IA)
                 setMensajes(prev => {
                   const copia = [...prev];
                   const loreTag = currentLore ? `[FUENTE_LORE:${currentLore}]\n` : '';
@@ -314,35 +350,30 @@ function App() {
                   return copia;
                 });
               } else if (dataObj.tipo === 'lore') {
-                currentLore = dataObj.fuente_lore; // Guardamos el nombre para dibujar la etiqueta
+                currentLore = dataObj.fuente_lore;
               } else if (dataObj.tipo === 'error') {
                 alert(dataObj.mensaje);
               }
-            } catch (err) {
-              // Ignorar silenciosamente líneas JSON malformadas a la mitad
-            }
+            } catch (err) {}
           }
         }
       }
 
-      // 3. Todo terminó, recargamos la escena para obtener los IDs reales guardados por SQLite
       seleccionarEscena(escenaActiva);
 
     } catch (error) { 
       alert("⚠️ No hay conexión con el servidor.");
       setMensajes((prev) => prev.slice(0, -2)); 
-      setMensaje(textoActual);
+      setMensaje(mensaje);
     } finally { 
       setCargando(false); 
     }
   };
 
-  // 👇 MISMA LÓGICA DE STREAMING PARA REGENERAR RESPUESTAS 👇
   const regenerarRespuesta = async (ultimoTextoUsuario) => {
     if (!escenaActiva) return;
     setCargando(true);
     
-    // Creamos la burbuja vacía
     setMensajes((prev) => [...prev, { id: 'temp-ia-regen', emisor: 'IA', contenido: '' }]);
 
     try {
@@ -444,7 +475,6 @@ function App() {
         eliminarEscena={eliminarEscena} 
       />
 
-      {/* COLUMNA CENTRAL */}
       <div className="flex-1 flex flex-col bg-slate-950 relative">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-slate-950 opacity-50 pointer-events-none"></div>
 
@@ -515,18 +545,30 @@ function App() {
             ) : groupedMessages.map((group, index) => {
               if (group.type === 'user') {
                 return (
-                  <MensajeUsuario key={`usr_${group.id}`} msg={group} onEdit={guardarEdicionYReenviar} onDelete={borrarMensaje} />
+                  <MensajeUsuario 
+                    key={`usr_${group.id}`}
+                    msg={group} 
+                    onEdit={guardarEdicionYReenviar} 
+                    onDelete={borrarMensaje} 
+                    onClone={clonarLineaTemporal} 
+                  />
                 );
               } else {
                 const mensajePrevio = groupedMessages[index - 1];
                 const textoQuePasoAntes = mensajePrevio && mensajePrevio.type === 'user' ? mensajePrevio.contenido : '(Continúa la escena)';
                 return (
-                  <GrupoIA key={`ai_${group.alts[0].id}`} alts={group.alts} onEdit={guardarEdicion} onDelete={borrarMensaje} onRegenerate={() => regenerarRespuesta(textoQuePasoAntes)} />
+                  <GrupoIA 
+                    key={`ai_${group.alts[0].id}`} 
+                    alts={group.alts} 
+                    onEdit={guardarEdicion} 
+                    onDelete={borrarMensaje} 
+                    onRegenerate={() => regenerarRespuesta(textoQuePasoAntes)} 
+                    onClone={clonarLineaTemporal} 
+                  />
                 );
               }
             })}
             
-            {/* Animación de Pensando (Solo aparece un instante antes de que lleguen las letras) */}
             {cargando && mensajes.length > 0 && mensajes[mensajes.length - 1].emisor === 'Jugador' && (
                <div className="self-start flex items-center gap-3 bg-slate-800/50 p-3 rounded-2xl rounded-tl-sm border border-slate-700">
                   <div className="flex gap-1">
@@ -537,16 +579,19 @@ function App() {
                   <span className="text-xs text-sky-400">Escuchando a la IA...</span>
                </div>
             )}
+
+            {/* 👇 ANCLA INVISIBLE PARA EL AUTO-SCROLL 👇 */}
+            <div ref={mensajesEndRef} />
           </div>
 
           <div className="flex gap-2 mb-2 px-1">
-             <button type="button" onClick={() => setMensaje(prev => prev + "[DIRECTOR: ] ")} className="px-2 py-1 bg-fuchsia-900/40 hover:bg-fuchsia-800/60 text-fuchsia-400 border border-fuchsia-700/50 rounded text-[10px] font-bold uppercase tracking-wider transition-colors">🎬 Orden al Sistema</button>
-             <button type="button" onClick={() => setMensaje(prev => prev + "[HECHO INMUTABLE: ] ")} className="px-2 py-1 bg-amber-900/40 hover:bg-amber-800/60 text-amber-400 border border-amber-700/50 rounded text-[10px] font-bold uppercase tracking-wider transition-colors">⚡ Forzar Evento</button>
-             <button type="button" onClick={() => setMensaje(prev => prev + "* * ")} className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600 rounded text-[10px] font-bold uppercase tracking-wider transition-colors">🏃 Acción</button>
+             <button type="button" onClick={() => setMensaje(prev => prev + "/orden ")} className="px-2 py-1 bg-fuchsia-900/40 hover:bg-fuchsia-800/60 text-fuchsia-400 border border-fuchsia-700/50 rounded text-[10px] font-bold uppercase tracking-wider transition-colors">🎬 Orden al Sistema</button>
+             <button type="button" onClick={() => setMensaje(prev => prev + "/forzar ")} className="px-2 py-1 bg-amber-900/40 hover:bg-amber-800/60 text-amber-400 border border-amber-700/50 rounded text-[10px] font-bold uppercase tracking-wider transition-colors">⚡ Forzar Evento</button>
+             <button type="button" onClick={() => setMensaje(prev => prev + "/accion ")} className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600 rounded text-[10px] font-bold uppercase tracking-wider transition-colors">🏃 Acción</button>
           </div>
 
           <form onSubmit={enviarMensaje} className="flex gap-3 relative">
-            <input type="text" value={mensaje} onChange={(e) => setMensaje(e.target.value)} placeholder="Escribe tu acción, diálogo o comando..." className="flex-1 p-4 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 placeholder:text-slate-500 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none shadow-lg transition-all" />
+            <input type="text" value={mensaje} onChange={(e) => setMensaje(e.target.value)} placeholder="Escribe un diálogo o usa /accion, /orden, /forzar..." className="flex-1 p-4 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 placeholder:text-slate-500 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none shadow-lg transition-all" />
             <button type="submit" disabled={cargando} className="px-6 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-xl shadow-lg shadow-sky-900/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center">Enviar</button>
           </form>
         </div>

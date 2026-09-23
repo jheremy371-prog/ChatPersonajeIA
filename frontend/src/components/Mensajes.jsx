@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 
-export function GrupoIA({ alts, onEdit, onDelete, onRegenerate }) {
+export function GrupoIA({ alts, onEdit, onDelete, onRegenerate, onClone }) {
   const [idx, setIdx] = useState(alts.length - 1);
   const [editando, setEditando] = useState(false);
   const [textoEdicion, setTextoEdicion] = useState('');
@@ -50,6 +50,8 @@ export function GrupoIA({ alts, onEdit, onDelete, onRegenerate }) {
           <div className="flex gap-1 opacity-0 hover:opacity-100 transition-opacity">
             <button onClick={() => { setEditando(!editando); setTextoEdicion(textoVisual); }} className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-white transition-colors" title="Editar">✏️</button>
             <button onClick={onRegenerate} className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-white transition-colors" title="Regenerar">🎲</button>
+            {/* 👇 BOTÓN DE BIFURCACIÓN AÑADIDO AQUÍ 👇 */}
+            <button onClick={() => onClone(msg.id)} className="p-1 hover:bg-emerald-900/50 rounded text-slate-400 hover:text-emerald-400 transition-colors" title="Bifurcar Línea Temporal (Clonar)">🔀</button>
             <button onClick={() => onDelete(msg.id)} className="p-1 hover:bg-red-900/50 rounded text-slate-400 hover:text-red-400 transition-colors" title="Borrar">🗑️</button>
           </div>
         </div>
@@ -70,7 +72,7 @@ export function GrupoIA({ alts, onEdit, onDelete, onRegenerate }) {
   );
 }
 
-export function MensajeUsuario({ msg, onEdit, onDelete }) {
+export function MensajeUsuario({ msg, onEdit, onDelete, onClone }) {
   const [editando, setEditando] = useState(false);
   const [textoEdicion, setTextoEdicion] = useState(msg.contenido);
 
@@ -85,6 +87,8 @@ export function MensajeUsuario({ msg, onEdit, onDelete }) {
         <span className="text-[11px] text-sky-400 font-bold uppercase tracking-wider">Tú</span>
         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
           <button onClick={() => { setEditando(!editando); setTextoEdicion(msg.contenido); }} className="p-1 hover:bg-sky-900/50 rounded text-slate-400 hover:text-white transition-colors" title="Editar y Reenviar">✏️</button>
+          {/* 👇 BOTÓN DE BIFURCACIÓN AÑADIDO AQUÍ 👇 */}
+          <button onClick={() => onClone(msg.id)} className="p-1 hover:bg-emerald-900/50 rounded text-slate-400 hover:text-emerald-400 transition-colors" title="Bifurcar Línea Temporal (Clonar)">🔀</button>
           <button onClick={() => onDelete(msg.id)} className="p-1 hover:bg-red-900/50 rounded text-slate-400 hover:text-red-400 transition-colors" title="Borrar">🗑️</button>
         </div>
       </div>
