@@ -23,6 +23,7 @@ class PersonajeChain:
             ("human", "{user_input}")
         ])
         
+        # Secuencia LCEL moderna
         self.chain = self.prompt | self.llm
 
     def deshacer_ultimo_turno(self):
@@ -49,6 +50,36 @@ class PersonajeChain:
             self.chat_history = self.chat_history[-10:]
             
         return respuesta.content
+
+    # 👇 MÉTODO AÑADIDO PARA HABILITAR EL STREAMING SSE 👇
+    def stream(self, inputs: dict):
+        """Generador para transmitir la respuesta token por token hacia el Frontend."""
+        user_input = inputs.get("user_input", "")
+        memoria_rol_actual = inputs.get("memoria_rol_actual", "")
+        
+        prompt_final = self.system_prompt_base
+        if memoria_rol_actual:
+            prompt_final += f"\n\n[ESTADO DEL MUNDO ACTUALIZADO]\n{memoria_rol_actual}"
+
+        respuesta_completa = ""
+        
+        # self.chain es LCEL, así que hereda el método .stream() automáticamente
+        for chunk in self.chain.stream({
+            "prompt_completo": prompt_final,
+            "chat_history": self.chat_history,
+            "user_input": user_input
+        }):
+            texto = chunk.content if hasattr(chunk, "content") else str(chunk)
+            respuesta_completa += texto
+            yield texto # Emitimos el fragmento (letra/palabra) al instante
+            
+        # Al terminar de emitir, guardamos la interacción completa en la memoria a corto plazo
+        self.chat_history.append(HumanMessage(content=user_input))
+        self.chat_history.append(AIMessage(content=respuesta_completa))
+        
+        # Mantenemos la ventana deslizante para que la RAM no colapse
+        if len(self.chat_history) > 10:
+            self.chat_history = self.chat_history[-10:]
 
 def crear_cadena_personaje(system_prompt_base: str):
     return PersonajeChain(system_prompt_base)

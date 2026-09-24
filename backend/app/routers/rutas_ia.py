@@ -1,6 +1,9 @@
 import json
 import os
-from fastapi import APIRouter, Depends, BackgroundTasks, UploadFile, File
+import tempfile
+import shutil
+
+from fastapi import APIRouter, Depends, BackgroundTasks, UploadFile, File, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage, AIMessage
@@ -44,211 +47,248 @@ class SintetizarRequest(BaseModel):
     id_escena: int
     memoria_actual: str
 
-cadenas_activas = {}
 
 @router.post("/api/chat")
 def chat_con_personaje(req: MensajeTest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    llave_personaje = f"{req.personaje}_{req.id_escena}"
     
-    if req.regenerar and llave_personaje in cadenas_activas:
-        cadenas_activas[llave_personaje].deshacer_ultimo_turno()
-
-    if llave_personaje not in cadenas_activas:
-        system_prompt = (
-            f"Eres {req.personaje} del universo de '{req.universo}'. "
-            f"Entorno: {req.tematica}. "
-            "REGLAS CANÓNICAS ABSOLUTAS: "
-            "1. Eres este personaje y hablas en primera persona. Nunca admitas ser una IA ni hables en tercera persona sobre 'el personaje'. "
-            "2. Los textos entre asteriscos (*) o corchetes ([]) del jugador son HECHOS INMUTABLES. Ocurren sí o sí. Reacciona a ellos asumiéndolos en tu realidad de inmediato. "
-            "3. FORMATO ESTRICTO DE RESPUESTA (ESTILO EMOCHI): "
-            "   - Tu diálogo hablado SIEMPRE va primero, encerrado entre guiones (-). "
-            "   - Tus acciones físicas, emociones y la descripción del entorno van ABAJO del diálogo, en un nuevo párrafo, SIN guiones y SIN asteriscos. "
-            "   - NUNCA expliques tu formato. NUNCA uses metarrol ni frases como 'El personaje reacciona a la situación'. Limítate a actuar. "
-            "   - PIENSA Y RESPONDE SOLO EN ESPAÑOL.\n\n"
-            "EJEMPLO EXACTO DE CÓMO DEBES RESPONDER SIEMPRE A PARTIR DE AHORA:\n"
-            "-¡Maldición, la policía nos encontró! ¡Muévete rápido, no dejes que te atrapen!-\n\n"
-            "Mi respiración se acelera mientras corro detrás de ti, esquivando los escombros del escondite. Saco mi arma y miro de reojo la ventana, sintiendo el pánico en el pecho mientras los oficiales se acercan."
-        )
-        chain = crear_cadena_personaje(system_prompt)
+    # 1. RECUPERAR DATOS Y SINCRONIZAR SQLITE
+    escena = db.query(models.Escena).filter(models.Escena.id == req.id_escena).first()
+    if not escena:
+        raise HTTPException(status_code=404, detail="Escena no encontrada")
         
-        historial_db = db.query(models.Mensaje).filter(models.Mensaje.id_escena == req.id_escena).order_by(models.Mensaje.id.desc()).limit(8).all()
-        historial_db.reverse()
-        for msg in historial_db:
-            if msg.id_emisor == 0:
-                chain.chat_history.append(HumanMessage(content=msg.contenido))
-            else:
-                chain.chat_history.append(AIMessage(content=msg.contenido))
-                
-        cadenas_activas[llave_personaje] = chain
+    if not escena.id_personaje:
+        nuevo_personaje = models.Personaje(nombre=req.personaje or "Desconocido")
+        db.add(nuevo_personaje)
+        db.commit()
+        db.refresh(nuevo_personaje)
+        escena.id_personaje = nuevo_personaje.id
+        db.commit()
+        db.refresh(escena)
+        
+    personaje_db = escena.personaje
     
-    chain = cadenas_activas[llave_personaje]
+    if req.personaje: personaje_db.nombre = req.personaje
+    if req.universo: personaje_db.universo = req.universo
+    if req.tematica: personaje_db.tematica = req.tematica
+    if req.detalles_extra: personaje_db.detalles_extra = req.detalles_extra
+    if req.perfil_jugador: escena.perfil_jugador = req.perfil_jugador
+    if req.memoria_rol: escena.resumen_contexto = req.memoria_rol
+    db.commit()
+
+    # 2. CONTEXT BUILDER: Construimos el cerebro inyectando todo en el Sistema, NO en el usuario.
     contextos = buscar_contexto(req.mensaje, req.id_escena)
-    
     texto_lore = contextos[0]["texto"] if contextos else ""
     fuente_lore = contextos[0]["fuente"] if contextos else None
-    
-    inyeccion_memoria = f"\n\n[ESTADO DEL MUNDO ACTUAL:\n{req.memoria_rol}]" if req.memoria_rol else ""
-    inyeccion_reglas = f"\n\n[REGLAS ABSOLUTAS:\n{req.detalles_extra}]" if req.detalles_extra else ""
-    inyeccion_jugador = f"\n\n[IDENTIDAD DEL JUGADOR CON EL QUE HABLAS:\n{req.perfil_jugador}]" if req.perfil_jugador else ""
-    inyeccion_lore = f"\n\n[LORE CONFIDENCIAL: {texto_lore}]" if texto_lore else "" 
-    
-    recordatorio_formato = (
-        "\n\n[REGLAS MAESTRAS DEL MOTOR DE ROL (DE CUMPLIMIENTO OBLIGATORIO):\n"
-        "1. LECTURA DEL JUGADOR: El jugador mezclará palabras habladas y acciones físicas. Las acciones físicas y gestos del jugador suelen ir entre asteriscos (*...*). DEBES analizar y reaccionar obligatoriamente a estas acciones de forma realista.\n"
-        "2. TU FORMATO DE RESPUESTA: Responde EXCLUSIVAMENTE actuando la escena. Escribe tus diálogos entre guiones largos (—...—) y describe tus acciones en tercera persona.\n"
-        "3. AUTONOMÍA ESTRICTA: Tienes ESTRICTAMENTE PROHIBIDO narrar los sentimientos, acciones, reacciones o diálogos del jugador. Solo tienes permitido controlar y describir a TU personaje.\n"
-        "4. CERO METARROL: No uses frases como 'Esto es un hecho inmutable', ni des explicaciones de tus acciones como si fueras una IA. Solo actúa.]"
+
+    system_prompt = (
+        f"Eres {personaje_db.nombre} del universo de '{personaje_db.universo}'.\n"
+        f"Entorno: {personaje_db.tematica}.\n\n"
+        "[REGLAS CANÓNICAS ABSOLUTAS]\n"
+        "1. Eres este personaje y hablas en primera persona.\n"
+        "2. Los textos entre asteriscos (*) del jugador son HECHOS INMUTABLES. Reacciona a ellos obligatoriamente.\n"
+        "3. FORMATO: Tu diálogo hablado SIEMPRE va primero entre guiones (—). Tus acciones van ABAJO en un nuevo párrafo. NUNCA uses metarrol. Solo actúa.\n"
     )
+
+    # Inyecciones modulares directas al subconsciente de la IA
+    if personaje_db.detalles_extra:
+        system_prompt += f"\n[PERSONALIDAD Y REGLAS DEL PERSONAJE]\n{personaje_db.detalles_extra}\n"
+    if escena.perfil_jugador:
+        system_prompt += f"\n[IDENTIDAD DEL JUGADOR]\n{escena.perfil_jugador}\n"
+    if escena.resumen_contexto:
+        system_prompt += f"\n[ESTADO DEL MUNDO ACTUAL (MEMORIA)]\n{escena.resumen_contexto}\n"
+    if texto_lore:
+        system_prompt += f"\n[LORE CONFIDENCIAL RECUPERADO (RAG)]\n{texto_lore}\n"
+
+    chain = crear_cadena_personaje(system_prompt)
     
-    mensaje_para_ia = req.mensaje + inyeccion_memoria + inyeccion_reglas + inyeccion_jugador + inyeccion_lore + recordatorio_formato
+    # 3. RECARGAR HISTORIAL DE SQLITE (CON SOPORTE MULTIVERSO)
+    def recolectar_mensajes_ancestros(esc):
+        mensajes_propios = db.query(models.Mensaje).filter(models.Mensaje.id_escena == esc.id).all()
+        if esc.escena_padre_id and esc.mensaje_bifurcacion_id:
+            padre = db.query(models.Escena).filter(models.Escena.id == esc.escena_padre_id).first()
+            if padre:
+                historia_pasada = recolectar_mensajes_ancestros(padre)
+                historia_recortada = [m for m in historia_pasada if m.id <= esc.mensaje_bifurcacion_id]
+                return historia_recortada + mensajes_propios
+        return mensajes_propios
+
+    historial_completo = recolectar_mensajes_ancestros(escena)
+    historial_completo.sort(key=lambda x: x.id)
+
+    # Si estamos regenerando, ignoramos la última mala respuesta de la IA
+    if req.regenerar and historial_completo:
+        historial_completo.pop()
+
+    # Tomamos solo los últimos 8 mensajes para no saturar los tokens de LangChain
+    historial_reciente = historial_completo[-8:]
+
+    for msg in historial_reciente:
+        if msg.id_emisor == 0: 
+            chain.chat_history.append(HumanMessage(content=msg.contenido))
+        else: 
+            chain.chat_history.append(AIMessage(content=msg.contenido))  
+
+    # 4. EL MENSAJE DEL USUARIO AHORA VA LIMPIO Y PURO
+    mensaje_puro = req.mensaje
     
-    # 👇 A PARTIR DE AQUÍ INICIA LA LÓGICA DE STREAMING 👇
-    
-    # 1. Guardamos el mensaje del JUGADOR de inmediato antes de procesar la IA
     if not req.regenerar:
-        msg_usuario = models.Mensaje(id_escena=req.id_escena, id_emisor=0, contenido=req.mensaje)
+        msg_usuario = models.Mensaje(id_escena=req.id_escena, id_emisor=0, contenido=mensaje_puro)
         db.add(msg_usuario)
         db.commit()
 
-    # 2. Definimos el Generador de Streaming SSE
     def generador_streaming():
         respuesta_completa = ""
-        
-        # A. Emitimos la etiqueta del Lorebook primero si existe
         if fuente_lore:
             yield f"data: {json.dumps({'tipo': 'lore', 'fuente_lore': fuente_lore})}\n\n"
 
         try:
-            # B. Transmitimos fragmento por fragmento (token por token)
-            for chunk in chain.stream({"user_input": mensaje_para_ia, "memoria_rol_actual": req.memoria_rol}):
-                
-                # LangChain devuelve diferentes estructuras dependiendo del modelo, esto lo estandariza:
+            # Mandamos el mensaje puro. La memoria_rol_actual va vacía porque ya está en el System Prompt
+            for chunk in chain.stream({"user_input": mensaje_puro, "memoria_rol_actual": ""}):
                 texto_fragmento = ""
-                if isinstance(chunk, str):
-                    texto_fragmento = chunk
-                elif isinstance(chunk, dict) and "text" in chunk:
-                    texto_fragmento = chunk["text"]
-                elif hasattr(chunk, "content"):
-                    texto_fragmento = chunk.content
+                if isinstance(chunk, str): texto_fragmento = chunk
+                elif isinstance(chunk, dict) and "text" in chunk: texto_fragmento = chunk["text"]
+                elif hasattr(chunk, "content"): texto_fragmento = chunk.content
                 
                 if texto_fragmento:
                     respuesta_completa += texto_fragmento
                     yield f"data: {json.dumps({'tipo': 'chunk', 'texto': texto_fragmento})}\n\n"
                     
         except Exception as e:
-            print(f"⚠️ Error en streaming: {e}")
             yield f"data: {json.dumps({'tipo': 'error', 'mensaje': 'Se cortó la conexión con Ollama.'})}\n\n"
 
-        # C. Al terminar de hablar, guardamos todo en SQLite
         texto_para_db = f"[FUENTE_LORE:{fuente_lore}]\n{respuesta_completa}" if fuente_lore else respuesta_completa
         msg_ia = models.Mensaje(id_escena=req.id_escena, id_emisor=1, contenido=texto_para_db)
         db.add(msg_ia)
         db.commit()
 
-        # D. Ejecutamos el agente Cronista síncronamente tras guardar
-        try:
-            redactar_cronica(req.mensaje, respuesta_completa, req.personaje, req.id_escena)
-        except Exception as e:
-            print(f"⚠️ Error al redactar crónica en streaming: {e}")
-
-        # E. Señal de finalización para el Frontend
+        background_tasks.add_task(redactar_cronica, mensaje_puro, respuesta_completa, req.personaje, req.id_escena)
         yield "data: [DONE]\n\n"
 
-    # 3. Retornamos la respuesta tipo Event-Stream
-    return StreamingResponse(generador_streaming(), media_type="text/event-stream")
+    return StreamingResponse(
+        generador_streaming(), 
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
+    )
 
-# ... (EL RESTO DE TUS ENDPOINTS SIGUEN EXACTAMENTE IGUAL) ...
+# Reemplaza la función obtener_historial en rutas_ia.py
 
 @router.get("/api/chat/historial/{id_escena}")
 def obtener_historial(id_escena: int, db: Session = Depends(get_db)):
-    mensajes = db.query(models.Mensaje).filter(models.Mensaje.id_escena == id_escena).all()
-    return {"mensajes": [{"id": m.id, "emisor": "Jugador" if m.id_emisor == 0 else "IA", "contenido": m.contenido} for m in mensajes]}
+    escena_actual = db.query(models.Escena).filter(models.Escena.id == id_escena).first()
+    if not escena_actual: return {"mensajes": [], "config": {}}
+    
+    # 1. Función recursiva para viajar por el multiverso y unir los mensajes
+    def recolectar_mensajes_ancestros(escena):
+        mensajes_propios = db.query(models.Mensaje).filter(models.Mensaje.id_escena == escena.id).all()
+        
+        # Si esta escena es una rama alternativa, buscamos el pasado en su padre
+        if escena.escena_padre_id and escena.mensaje_bifurcacion_id:
+            padre = db.query(models.Escena).filter(models.Escena.id == escena.escena_padre_id).first()
+            if padre:
+                # Obtenemos la historia del padre, pero la CORTAMOS en el punto de bifurcación
+                historia_pasada = recolectar_mensajes_ancestros(padre)
+                historia_recortada = [m for m in historia_pasada if m.id <= escena.mensaje_bifurcacion_id]
+                return historia_recortada + mensajes_propios
+                
+        return mensajes_propios
+
+    # 2. Ejecutamos la recolección temporal
+    historial_completo = recolectar_mensajes_ancestros(escena_actual)
+    
+    # Ordenamos por ID para asegurar la línea de tiempo correcta
+    historial_completo.sort(key=lambda x: x.id)
+    
+    config = {
+        "personaje": escena_actual.personaje.nombre if escena_actual.personaje else "",
+        "universo": escena_actual.personaje.universo if escena_actual.personaje else "",
+        "tematica": escena_actual.personaje.tematica if escena_actual.personaje else "",
+        "detalles_extra": escena_actual.personaje.detalles_extra if escena_actual.personaje else "",
+        "perfil_jugador": escena_actual.perfil_jugador or "",
+        "memoria_rol": escena_actual.resumen_contexto or ""
+    }
+    
+    return {
+        "mensajes": [{"id": m.id, "emisor": "Jugador" if m.id_emisor == 0 else "IA", "contenido": m.contenido} for m in historial_completo],
+        "config": config
+    }
 
 @router.post("/api/director_magico")
 def analizar_texto_director(req: TextoDirectorRequest, db: Session = Depends(get_db)):
     llm = get_llm()
     prompt = (
-        "Devuelve ÚNICAMENTE JSON puro. Claves exactas: "
-        '{"personaje": "", "universo": "", "tematica": "", "detalles_extra": "", "titulo_partida": ""}\n'
+        "Actúa como un extractor de metadatos. Devuelve ÚNICAMENTE un JSON puro y válido con estas claves exactas: "
+        '{"personaje": "", "universo": "", "tematica": "", "detalles_extra": "", "titulo_partida": ""}. '
         f"Texto: {req.texto_crudo}"
     )
     try:
         res = llm.invoke(prompt)
         datos = json.loads(res.content.replace("```json", "").replace("```", "").strip())
+        
         escena = db.query(models.Escena).filter(models.Escena.id == req.id_escena).first()
         if escena:
             escena.contexto_inicial = req.texto_crudo
+            # Si el director adivina el personaje, lo guardamos en la DB
+            if not escena.id_personaje and "personaje" in datos:
+                nuevo_pj = models.Personaje(nombre=datos["personaje"], universo=datos.get("universo"), tematica=datos.get("tematica"), detalles_extra=datos.get("detalles_extra"))
+                db.add(nuevo_pj)
+                db.commit()
+                db.refresh(nuevo_pj)
+                escena.id_personaje = nuevo_pj.id
+            elif escena.personaje:
+                if "universo" in datos: escena.personaje.universo = datos["universo"]
+                if "tematica" in datos: escena.personaje.tematica = datos["tematica"]
             db.commit()
+            
         return datos
     except Exception as e:
         return {"error": str(e)}
 
 @router.post("/api/sintetizar_memoria")
 def sintetizar_memoria(req: SintetizarRequest, db: Session = Depends(get_db)):
+    escena = db.query(models.Escena).filter(models.Escena.id == req.id_escena).first()
     mensajes = db.query(models.Mensaje).filter(models.Mensaje.id_escena == req.id_escena).order_by(models.Mensaje.id.desc()).limit(15).all()
     mensajes.reverse()
     historial_texto = "\n".join([f"{'Jugador' if m.id_emisor==0 else 'IA'}: {m.contenido}" for m in mensajes])
     llm = get_llm()
+    
     memoria_anterior = req.memoria_actual if req.memoria_actual.strip() else "[MISION ACTUAL]\n..."
-
-    prompt = f"""Eres un Notario de Continuidad para un juego de rol. 
-INSTRUCCIONES ESTRICTAS:
-1. REGLA DE ORO: Copia y mantén INTACTO todo el texto, formato, reglas e identidad del "DOCUMENTO ACTUAL". No borres ni modifiques las instrucciones del sistema.
-2. Analiza los "ÚLTIMOS EVENTOS DEL CHAT" para detectar progresos de historia, nuevos objetos, o cambios en el entorno.
-3. Añade esa nueva información de forma estructurada DEBAJO del texto original.
-4. AL FINAL de tu respuesta, crea obligatoriamente una sección llamada [REGISTRO DE CAMBIOS] donde expliques en 1 o 2 líneas exactas qué información nueva acabas de añadir.
-
-DOCUMENTO ACTUAL:
-{memoria_anterior}
-
-ÚLTIMOS EVENTOS DEL CHAT:
-{historial_texto}
-
-Reescribe el documento cumpliendo las instrucciones y añadiendo el [REGISTRO DE CAMBIOS]:"""
+    prompt = f"""Eres un Notario de Continuidad. Copia el DOCUMENTO ACTUAL y añade los nuevos eventos debajo. Al final crea un [REGISTRO DE CAMBIOS].\n\nDOCUMENTO ACTUAL:\n{memoria_anterior}\n\nÚLTIMOS EVENTOS:\n{historial_texto}"""
 
     try:
         resultado = llm.invoke(prompt)
-        return {"estado": "éxito", "nueva_memoria": resultado.content.strip()}
+        nueva_mem = resultado.content.strip()
+        
+        # GUARDAMOS LA MEMORIA EN SQLITE DEFINITIVAMENTE
+        if escena:
+            escena.resumen_contexto = nueva_mem
+            db.commit()
+            
+        return {"estado": "éxito", "nueva_memoria": nueva_mem}
     except Exception as e:
         return {"error": str(e)}
 
-@router.put("/api/mensajes/{id_mensaje}")
-def editar_mensaje(id_mensaje: int, req: MensajeEdit, db: Session = Depends(get_db)):
-    msg = db.query(models.Mensaje).filter(models.Mensaje.id == id_mensaje).first()
-    if msg:
-        msg.contenido = req.contenido
-        db.commit()
-        cadenas_activas.clear()
-        return {"estado": "éxito"}
-    return {"error": "Mensaje no encontrado"}
-
-@router.delete("/api/mensajes/{id_mensaje}")
-def borrar_mensaje(id_mensaje: int, db: Session = Depends(get_db)):
-    msg = db.query(models.Mensaje).filter(models.Mensaje.id == id_mensaje).first()
-    if msg:
-        db.delete(msg)
-        db.commit()
-        cadenas_activas.clear()
-        return {"estado": "éxito"}
-    return {"error": "Mensaje no encontrado"}
-
 @router.post("/api/tavern/leer_tarjeta")
 async def leer_tarjeta_tavern(archivo: UploadFile = File(...)):
-    if not archivo.filename.endswith('.png'):
-        return {"error": "El archivo debe ser un PNG."}
+    # 1. Validación estricta de MIME type y extensión
+    if archivo.content_type not in ["image/png", "image/webp"] and not archivo.filename.lower().endswith(('.png', '.webp')):
+        return {"error": "Solo se permiten imágenes PNG o WEBP de Tavern."}
         
-    ruta_temporal = f"temp_{archivo.filename}"
+    # 2. Uso de Tempfile seguro (evita colisiones y lee por fragmentos)
     try:
-        contenido = await archivo.read()
-        with open(ruta_temporal, "wb") as f:
-            f.write(contenido)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+            shutil.copyfileobj(archivo.file, tmp)
+            ruta_temporal = tmp.name
             
+        # 3. Extraer la data
         resultado = extraer_datos_personaje(ruta_temporal)
         
+        # 4. Limpieza garantizada
         if os.path.exists(ruta_temporal):
             os.remove(ruta_temporal)
+            
         return resultado
+        
     except Exception as e:
-        if os.path.exists(ruta_temporal):
+        if 'ruta_temporal' in locals() and os.path.exists(ruta_temporal):
             os.remove(ruta_temporal)
-        return {"error": f"Ocurrió un error al procesar el archivo: {str(e)}"}
+        return {"error": f"Error al procesar la tarjeta: {str(e)}"}

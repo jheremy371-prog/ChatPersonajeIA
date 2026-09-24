@@ -2,28 +2,25 @@ import { useState, useEffect, useRef } from 'react';
 import { GrupoIA, MensajeUsuario } from './components/Mensajes';
 import Sidebar from './components/Sidebar';
 import PanelDerecho from './components/PanelDerecho';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+import { api } from './services/api';
+import { useChat } from './hooks/useChat';
 
 function App() {
+  // 1. ESTADOS DE CONFIGURACIÓN DEL PERSONAJE
   const [personaje, setPersonaje] = useState('');
   const [universo, setUniverso] = useState('');
   const [tematica, setTematica] = useState('');
   const [detallesExtra, setDetallesExtra] = useState(''); 
   const [perfilJugador, setPerfilJugador] = useState(''); 
   
+  // 2. ESTADOS DE LA UI Y MEMORIA
   const [escenas, setEscenas] = useState([]);
   const [escenaActiva, setEscenaActiva] = useState(null);
-  const [mensajes, setMensajes] = useState([]);
   const [mensaje, setMensaje] = useState('');
-  
   const [textoMagico, setTextoMagico] = useState('');
   const [procesandoMagia, setProcesandoMagia] = useState(false);
-  const [cargando, setCargando] = useState(false);
-  
   const [memoriaRol, setMemoriaRol] = useState(''); 
   const [actualizandoMemoria, setActualizandoMemoria] = useState(false);
-
   const [entidades, setEntidades] = useState([]);
   const [nuevaEntidad, setNuevaEntidad] = useState({ nombre: '', tipo: 'Personaje', descripcion: '' });
   const [cronicas, setCronicas] = useState([]);
@@ -31,81 +28,75 @@ function App() {
   const [loreTitulo, setLoreTitulo] = useState('');
   const [loreTexto, setLoreTexto] = useState('');
 
-  // 👇 1. REFERENCIA PARA EL AUTO-SCROLL INTELIGENTE 👇
+  // 3. AUTO-SCROLL INTELIGENTE
   const mensajesEndRef = useRef(null);
+  const scrollToBottom = () => mensajesEndRef.current?.scrollIntoView({ behavior: "smooth" });
 
-  const scrollToBottom = () => {
-    mensajesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  // 4. FUNCIONES AUXILIARES PARA EL HOOK DE CHAT
+  const recargarEntidadesYCronicas = (id) => {
+    cargarEntidades(id);
+    cargarCronicas(id);
   };
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [mensajes]); // Cada vez que los mensajes cambien (incluso letra por letra), baja la pantalla.
-  // ----------------------------------------------------
+  // 👇 INYECCIÓN DEL CUSTOM HOOK DE STREAMING 👇
+  const { mensajes, setMensajes, cargando, enviar, regenerar } = useChat(escenaActiva, recargarEntidadesYCronicas);
 
+  useEffect(() => { scrollToBottom(); }, [mensajes]);
+  useEffect(() => { cargarEscenas(); }, []);
+
+  // --- SERVICIOS DE ESCENAS ---
   const cargarEscenas = async () => {
-    const res = await fetch(`${API_URL}/api/escenas`);
-    const data = await res.json();
-    setEscenas(data);
-    if (data.length > 0 && !escenaActiva) seleccionarEscena(data[0].id);
-  };
-
-  const cargarCronicas = async (id) => {
-    if (!id) return;
     try {
-      const res = await fetch(`${API_URL}/api/cronicas/${id}`);
-      const data = await res.json();
-      setCronicas(Array.isArray(data) ? data : []);
-    } catch (error) { setCronicas([]); }
+      const data = await api.getEscenas();
+      setEscenas(data);
+      if (data.length > 0 && !escenaActiva) seleccionarEscena(data[0].id);
+    } catch (error) { console.error("Error cargando escenas:", error); }
   };
 
   const seleccionarEscena = async (id) => {
     setEscenaActiva(id);
-    const resChat = await fetch(`${API_URL}/api/chat/historial/${id}`);
-    const dataChat = await resChat.json();
-    setMensajes(dataChat.mensajes || []);
-    cargarEntidades(id);
-    cargarCronicas(id); 
-    setMemoriaRol(''); 
-  };
-
-  const cargarEntidades = async (id) => {
-    if (!id) return;
-    const res = await fetch(`${API_URL}/api/entidades/${id}`);
-    const data = await res.json();
-    setEntidades(Array.isArray(data) ? data : []);
+    try {
+      const dataChat = await api.getHistorial(id);
+      setMensajes(dataChat.mensajes || []);
+      recargarEntidadesYCronicas(id);
+      
+      if (dataChat.config) {
+         setPersonaje(dataChat.config.personaje || '');
+         setUniverso(dataChat.config.universo || '');
+         setTematica(dataChat.config.tematica || '');
+         setDetallesExtra(dataChat.config.detalles_extra || '');
+         setPerfilJugador(dataChat.config.perfil_jugador || '');
+         setMemoriaRol(dataChat.config.memoria_rol || '');
+      }
+    } catch (error) { console.error("Error al seleccionar escena:", error); }
   };
 
   const crearNuevaEscena = async () => {
-    const res = await fetch(`${API_URL}/api/escenas`, { 
-      method: 'POST', 
-      headers: { 'Content-Type': 'application/json' }, 
-      body: JSON.stringify({ nombre: `Aventura ${escenas.length + 1}` }) 
-    });
-    const data = await res.json();
-    setEscenas([...escenas, data]);
-    seleccionarEscena(data.id);
+    try {
+      const data = await api.crearEscena(`Aventura ${escenas.length + 1}`);
+      setEscenas([...escenas, data]);
+      seleccionarEscena(data.id);
+    } catch (error) { alert("Error al crear la partida."); }
   };
 
   const eliminarEscena = async (id, e) => {
     e.stopPropagation();
     if (!window.confirm("⚠️ ¿Borrar esta aventura?")) return;
     try {
-      await fetch(`${API_URL}/api/escenas/${id}`, { method: 'DELETE' });
+      await api.eliminarEscena(id);
       const nuevasEscenas = escenas.filter(esc => esc.id !== id);
       setEscenas(nuevasEscenas);
       if (escenaActiva === id) {
         if (nuevasEscenas.length > 0) seleccionarEscena(nuevasEscenas[0].id);
         else { setEscenaActiva(null); setMensajes([]); setEntidades([]); setCronicas([]); }
       }
-    } catch (error) { console.error(error); }
+    } catch (error) { alert("Error al eliminar la escena."); }
   };
 
   const exportarAventura = async () => {
     if (!escenaActiva) return;
     try {
-      const res = await fetch(`${API_URL}/api/escenas/${escenaActiva}/exportar`);
-      const data = await res.json();
+      const data = await api.exportarEscena(escenaActiva);
       if (data.error) return alert(data.error);
 
       const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(data, null, 2));
@@ -115,9 +106,97 @@ function App() {
       document.body.appendChild(downloadAnchorNode); 
       downloadAnchorNode.click();
       downloadAnchorNode.remove();
-    } catch (error) {
-      console.error("Error al exportar:", error);
-    }
+    } catch (error) { alert("Error al exportar."); }
+  };
+
+  // --- SERVICIOS DE PANEL DERECHO Y LORE ---
+  const cargarCronicas = async (id) => {
+    if (!id) return;
+    try {
+      const data = await api.getCronicas(id);
+      setCronicas(Array.isArray(data) ? data : []);
+    } catch (error) { setCronicas([]); }
+  };
+
+  const cargarEntidades = async (id) => {
+    if (!id) return;
+    try {
+      const data = await api.getEntidades(id);
+      setEntidades(Array.isArray(data) ? data : []);
+    } catch (error) { setEntidades([]); }
+  };
+
+  const registrarEntidad = async () => {
+    if (!escenaActiva || !nuevaEntidad.nombre) return;
+    try {
+      await api.crearEntidad({ ...nuevaEntidad, id_escena: escenaActiva });
+      setNuevaEntidad({ nombre: '', tipo: 'Personaje', descripcion: '' });
+      cargarEntidades(escenaActiva);
+    } catch (error) { alert("Error al registrar entidad."); }
+  };
+
+  const guardarLorebook = async () => {
+    if (!escenaActiva) return alert("Selecciona una partida primero.");
+    if (!loreTitulo || !loreTexto) return alert("Falta título o contenido.");
+    try {
+      await api.guardarLore({ id_escena: escenaActiva, id_documento: loreTitulo, texto_lore: loreTexto });
+      alert("📖 Lore inyectado exitosamente en ESTE universo.");
+      setLoreTitulo(''); setLoreTexto('');
+    } catch (error) { alert("Error al guardar Lore."); }
+  };
+
+  // --- SERVICIOS DE CHAT Y MULTIVERSO ---
+  const borrarMensaje = async (id_mensaje) => {
+    if (!window.confirm("¿Eliminar este mensaje permanentemente?")) return;
+    await api.borrarMensaje(id_mensaje);
+    seleccionarEscena(escenaActiva); 
+  };
+
+  const guardarEdicion = async (id_mensaje, nuevoTexto) => {
+    await api.editarMensaje(id_mensaje, nuevoTexto);
+    seleccionarEscena(escenaActiva); 
+  };
+
+  const clonarLineaTemporal = async (id_mensaje) => {
+    if (!window.confirm("🌌 ¿Crear una línea temporal alternativa desde este punto?")) return;
+    try {
+      const data = await api.clonarEscena(escenaActiva, id_mensaje);
+      if (data.nueva_escena_id) {
+        await cargarEscenas(); 
+        seleccionarEscena(data.nueva_escena_id); 
+      }
+    } catch (error) { alert("Error al bifurcar la línea temporal."); }
+  };
+
+  // --- SERVICIOS DE IA AVANZADOS ---
+  const aplicarMagiaDirector = async () => {
+    if (!textoMagico.trim() || !escenaActiva) return;
+    setProcesandoMagia(true);
+    try {
+      const data = await api.configurarDirector({ texto_crudo: textoMagico, id_escena: escenaActiva });
+      if (!data.error) {
+        if(data.personaje) setPersonaje(data.personaje);
+        if(data.universo) setUniverso(data.universo);
+        if(data.tematica) setTematica(data.tematica);
+        if(data.detalles_extra) setDetallesExtra(data.detalles_extra);
+        if(data.titulo_partida) {
+          await api.editarMensaje(escenaActiva, data.titulo_partida); // Reutilizamos lógica si es necesario, o recargamos
+          cargarEscenas(); 
+        }
+        setTextoMagico(''); 
+      }
+    } catch (error) { alert("Error aplicando la magia del director."); } 
+    finally { setProcesandoMagia(false); }
+  };
+
+  const autoActualizarMemoria = async (memoriaActualParaEnviar) => {
+    if (!escenaActiva) return; 
+    setActualizandoMemoria(true);
+    try {
+      const data = await api.sintetizarMemoria({ id_escena: escenaActiva, memoria_actual: memoriaActualParaEnviar });
+      if (data.nueva_memoria) setMemoriaRol(data.nueva_memoria);
+    } catch (error) { alert("Error al actualizar memoria."); } 
+    finally { setActualizandoMemoria(false); }
   };
 
   const subirTarjetaTavern = async (e) => {
@@ -131,336 +210,58 @@ function App() {
     formData.append('archivo', file);
 
     try {
-      const res = await fetch(`${API_URL}/api/tavern/leer_tarjeta`, {
-        method: 'POST',
-        body: formData
-      });
-      const data = await res.json();
-      
+      const data = await api.leerTavern(formData);
       if (data.error) {
         alert(data.error);
-        if (boton) boton.innerText = "🎴 Subir PNG (Tavern)";
-        return;
+      } else {
+        if (data.nombre) setPersonaje(data.nombre);
+        if (data.escenario) setUniverso(data.escenario);
+        if (data.personalidad || data.descripcion) {
+          setDetallesExtra(`[PERSONALIDAD]\n${data.personalidad}\n\n[DESCRIPCIÓN]\n${data.descripcion}`);
+        }
+        alert(`¡Alma de ${data.nombre} extraída con éxito!`);
       }
-
-      if (data.nombre) setPersonaje(data.nombre);
-      if (data.escenario) setUniverso(data.escenario);
-      if (data.personalidad || data.descripcion) {
-        setDetallesExtra(`[PERSONALIDAD]\n${data.personalidad}\n\n[DESCRIPCIÓN]\n${data.descripcion}`);
-      }
-      
-      alert(`¡Alma de ${data.nombre} extraída con éxito!`);
-      if (boton) boton.innerText = "🎴 Subir PNG (Tavern)";
-      
     } catch (error) {
-      console.error(error);
       alert("Error al leer la tarjeta.");
+    } finally {
       if (boton) boton.innerText = "🎴 Subir PNG (Tavern)";
-    }
-    e.target.value = null;
-  };
-
-  useEffect(() => { cargarEscenas(); }, []);
-
-  const guardarLorebook = async () => {
-    if (!escenaActiva) return alert("Selecciona una partida primero.");
-    if (!loreTitulo || !loreTexto) return alert("Falta título o contenido.");
-    await fetch(`${API_URL}/api/lore`, { 
-      method: 'POST', 
-      headers: { 'Content-Type': 'application/json' }, 
-      body: JSON.stringify({ id_escena: escenaActiva, id_documento: loreTitulo, texto_lore: loreTexto }) 
-    });
-    alert("📖 Lore inyectado exitosamente en ESTE universo.");
-    setLoreTitulo(''); setLoreTexto('');
-  };
-
-  const borrarMensaje = async (id_mensaje) => {
-    if (!window.confirm("¿Eliminar este mensaje permanentemente?")) return;
-    await fetch(`${API_URL}/api/mensajes/${id_mensaje}`, { method: 'DELETE' });
-    seleccionarEscena(escenaActiva); 
-  };
-
-  // 👇 FUNCIÓN AÑADIDA: BIFURCACIÓN DE LÍNEA TEMPORAL 👇
-  const clonarLineaTemporal = async (id_mensaje) => {
-    if (!window.confirm("🌌 ¿Crear una línea temporal alternativa desde este punto? Esto clonará la aventura en una nueva partida.")) return;
-    try {
-      const res = await fetch(`${API_URL}/api/escenas/${escenaActiva}/clonar/${id_mensaje}`, { method: 'POST' });
-      const data = await res.json();
-      if (data.nueva_escena_id) {
-        await cargarEscenas(); 
-        seleccionarEscena(data.nueva_escena_id); 
-      }
-    } catch (error) {
-      alert("Error al bifurcar la línea temporal.");
+      e.target.value = null;
     }
   };
 
-  const guardarEdicion = async (id_mensaje, nuevoTexto) => {
-    await fetch(`${API_URL}/api/mensajes/${id_mensaje}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contenido: nuevoTexto }),
-    });
-    seleccionarEscena(escenaActiva); 
-  };
+  // --- ENVOLTURAS PARA EL HOOK DE CHAT ---
+  const payloadActual = { personaje, universo, tematica, detalles_extra: detallesExtra, memoria_rol: memoriaRol, perfil_jugador: perfilJugador };
 
-  const guardarEdicionYReenviar = async (id_mensaje, nuevoTexto) => {
-    await fetch(`${API_URL}/api/mensajes/${id_mensaje}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contenido: nuevoTexto }),
-    });
-    seleccionarEscena(escenaActiva); 
-  };
-
-  const autoActualizarMemoria = async (memoriaActualParaEnviar) => {
-    if (!escenaActiva) return; 
-    setActualizandoMemoria(true);
-    try {
-      const res = await fetch(`${API_URL}/api/sintetizar_memoria`, { 
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' }, 
-        body: JSON.stringify({ id_escena: escenaActiva, memoria_actual: memoriaActualParaEnviar }) 
-      });
-      const data = await res.json();
-      if (data.nueva_memoria) setMemoriaRol(data.nueva_memoria);
-    } catch (error) {} finally { setActualizandoMemoria(false); }
-  };
-
-  const aplicarMagiaDirector = async () => {
-    if (!textoMagico.trim() || !escenaActiva) return;
-    setProcesandoMagia(true);
-    try {
-      const res = await fetch(`${API_URL}/api/director_magico`, { 
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' }, 
-        body: JSON.stringify({ texto_crudo: textoMagico, id_escena: escenaActiva }) 
-      });
-      const data = await res.json();
-      if (!data.error) {
-        if(data.personaje) setPersonaje(data.personaje);
-        if(data.universo) setUniverso(data.universo);
-        if(data.tematica) setTematica(data.tematica);
-        if(data.detalles_extra) setDetallesExtra(data.detalles_extra);
-        if(data.titulo_partida) {
-          await fetch(`${API_URL}/api/escenas/${escenaActiva}`, { 
-            method: 'PUT', 
-            headers: { 'Content-Type': 'application/json' }, 
-            body: JSON.stringify({ nombre: data.titulo_partida }) 
-          });
-          cargarEscenas(); 
-        }
-        setTextoMagico(''); 
-      }
-    } catch (error) {} finally { setProcesandoMagia(false); }
-  };
-
-  const registrarEntidad = async () => {
-    if (!escenaActiva || !nuevaEntidad.nombre) return;
-    await fetch(`${API_URL}/api/entidades`, { 
-      method: 'POST', 
-      headers: { 'Content-Type': 'application/json' }, 
-      body: JSON.stringify({ ...nuevaEntidad, id_escena: escenaActiva }) 
-    });
-    setNuevaEntidad({ nombre: '', tipo: 'Personaje', descripcion: '' });
-    cargarEntidades(escenaActiva);
-  };
-
-  const convocarEntidad = (entidad) => {
-    const comando = `[ACCION DEL SISTEMA: El Director introduce a la escena a '${entidad.nombre}' (${entidad.tipo}). Detalles: ${entidad.descripcion}.] `;
-    setMensaje(comando);
-  };
-
-
-  const enviarMensaje = async (e) => {
+  const manejarEnvio = async (e) => {
     e.preventDefault();
-    if (!mensaje.trim() || !escenaActiva) return;
-    setCargando(true);
-    
-    // 👇 2. INTERCEPTOR DE COMANDOS SLASH 👇
-    let textoAEnviar = mensaje.trim();
-    const cmdCheck = textoAEnviar.toLowerCase();
-    
-    if (cmdCheck.startsWith('/orden ')) {
-      textoAEnviar = `[DIRECTOR: ] ${textoAEnviar.substring(7).trim()}`;
-    } else if (cmdCheck.startsWith('/forzar ')) {
-      textoAEnviar = `[HECHO INMUTABLE: ] ${textoAEnviar.substring(8).trim()}`;
-    } else if (cmdCheck.startsWith('/accion ')) {
-      // Envolvemos mágicamente la acción en asteriscos
-      textoAEnviar = `*${textoAEnviar.substring(8).trim()}*`; 
-    }
-    // ------------------------------------------------
-    
-    const textoVisual = textoAEnviar.startsWith("[ACCION DEL SISTEMA") ? "*(Convoca entidad)* " + textoAEnviar.split("] ")[1] : textoAEnviar;
-    
-    // Usamos el texto modificado
-    setMensajes((prev) => [
-      ...prev, 
-      { id: Date.now(), emisor: 'Jugador', contenido: textoVisual },
-      { id: 'temp-ia', emisor: 'IA', contenido: '' }
-    ]);
-    setMensaje(''); // Limpiamos el input
-
-    try {
-      const res = await fetch(`${API_URL}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          mensaje: textoAEnviar, // Enviamos el texto parseado al backend
-          personaje, universo, tematica, detalles_extra: detallesExtra, 
-          memoria_rol: memoriaRol, perfil_jugador: perfilJugador, id_escena: escenaActiva, regenerar: false
-        }),
-      });
-      
-      if (!res.ok) {
-        alert("Ocurrió un error en el servidor.");
-        setMensajes((prev) => prev.slice(0, -2)); 
-        setMensaje(mensaje); // Devolvemos el mensaje original al input en caso de error
-        return;
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let aiText = '';
-      let currentLore = null;
-      let buffer = ''; 
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop(); 
-        
-        for (let line of lines) {
-          if (line.trim() === '') continue;
-          if (line.startsWith('data: ')) {
-            const dataStr = line.slice(6).trim();
-            if (dataStr === '[DONE]') break; 
-            
-            try {
-              const dataObj = JSON.parse(dataStr);
-              if (dataObj.tipo === 'chunk') {
-                aiText += dataObj.texto;
-                setMensajes(prev => {
-                  const copia = [...prev];
-                  const loreTag = currentLore ? `[FUENTE_LORE:${currentLore}]\n` : '';
-                  copia[copia.length - 1] = { ...copia[copia.length - 1], contenido: loreTag + aiText };
-                  return copia;
-                });
-              } else if (dataObj.tipo === 'lore') {
-                currentLore = dataObj.fuente_lore;
-              } else if (dataObj.tipo === 'error') {
-                alert(dataObj.mensaje);
-              }
-            } catch (err) {}
-          }
-        }
-      }
-
-      seleccionarEscena(escenaActiva);
-
-    } catch (error) { 
-      alert("⚠️ No hay conexión con el servidor.");
-      setMensajes((prev) => prev.slice(0, -2)); 
-      setMensaje(mensaje);
-    } finally { 
-      setCargando(false); 
-    }
+    await enviar(mensaje, payloadActual);
+    setMensaje(''); 
   };
 
-  const regenerarRespuesta = async (ultimoTextoUsuario) => {
-    if (!escenaActiva) return;
-    setCargando(true);
-    
-    setMensajes((prev) => [...prev, { id: 'temp-ia-regen', emisor: 'IA', contenido: '' }]);
-
-    try {
-      const res = await fetch(`${API_URL}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          mensaje: ultimoTextoUsuario, personaje, universo, tematica, detalles_extra: detallesExtra, 
-          memoria_rol: memoriaRol, perfil_jugador: perfilJugador, id_escena: escenaActiva, regenerar: true
-        }),
-      });
-      
-      if (!res.ok) {
-        alert("Error al intentar crear una línea temporal alternativa.");
-        setMensajes((prev) => prev.slice(0, -1));
-        return;
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let aiText = '';
-      let currentLore = null;
-      let buffer = '';
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
-        
-        for (let line of lines) {
-          if (line.trim() === '') continue;
-          if (line.startsWith('data: ')) {
-            const dataStr = line.slice(6).trim();
-            if (dataStr === '[DONE]') break;
-            
-            try {
-              const dataObj = JSON.parse(dataStr);
-              if (dataObj.tipo === 'chunk') {
-                aiText += dataObj.texto;
-                setMensajes(prev => {
-                  const copia = [...prev];
-                  const loreTag = currentLore ? `[FUENTE_LORE:${currentLore}]\n` : '';
-                  copia[copia.length - 1] = { ...copia[copia.length - 1], contenido: loreTag + aiText };
-                  return copia;
-                });
-              } else if (dataObj.tipo === 'lore') {
-                currentLore = dataObj.fuente_lore;
-              }
-            } catch (err) {}
-          }
-        }
-      }
-      
-      seleccionarEscena(escenaActiva);
-
-    } catch (error) { 
-      alert("⚠️ No hay conexión con el servidor.");
-      setMensajes((prev) => prev.slice(0, -1));
-    } finally { 
-      setCargando(false); 
-    }
+  const manejarRegeneracion = async (textoAnterior) => {
+    await regenerar(textoAnterior, payloadActual);
   };
 
+  // --- HELPERS UI ---
+  const convocarEntidad = (entidad) => setMensaje(`[ACCION DEL SISTEMA: El Director introduce a la escena a '${entidad.nombre}' (${entidad.tipo}). Detalles: ${entidad.descripcion}.] `);
   const cargarIdentidadAEstado = (e) => {
     e.preventDefault();
-    const textoIdentidad = `\n[IDENTIDAD IA]\n- Personaje: ${personaje || 'No definido'}\n- Universo: ${universo || 'No definido'}\n`;
-    setMemoriaRol(prev => prev + textoIdentidad);
+    setMemoriaRol(prev => prev + `\n[IDENTIDAD IA]\n- Personaje: ${personaje || 'No definido'}\n- Universo: ${universo || 'No definido'}\n`);
     setPestañaDerecha('memoria');
   };
 
+  // AGRUPACIÓN VISUAL DE MENSAJES
   const escenaActualObj = escenas.find(e => e.id === escenaActiva);
   const nombreEscenaHeader = escenaActualObj ? escenaActualObj.nombre : `Selecciona un Chat`;
-
+  
   const groupedMessages = [];
   for (let msg of mensajes) {
     if (msg.emisor === 'Jugador') {
       groupedMessages.push({ type: 'user', id: msg.id, contenido: msg.contenido });
     } else {
       const last = groupedMessages[groupedMessages.length - 1];
-      if (last && last.type === 'ai_group') {
-        last.alts.push(msg); 
-      } else {
-        groupedMessages.push({ type: 'ai_group', alts: [msg] });
-      }
+      if (last && last.type === 'ai_group') last.alts.push(msg); 
+      else groupedMessages.push({ type: 'ai_group', alts: [msg] });
     }
   }
 
@@ -468,11 +269,8 @@ function App() {
     <div className="flex h-screen w-screen bg-slate-950 text-slate-200 font-sans overflow-hidden">
       
       <Sidebar 
-        escenas={escenas} 
-        escenaActiva={escenaActiva} 
-        crearNuevaEscena={crearNuevaEscena} 
-        seleccionarEscena={seleccionarEscena} 
-        eliminarEscena={eliminarEscena} 
+        escenas={escenas} escenaActiva={escenaActiva} 
+        crearNuevaEscena={crearNuevaEscena} seleccionarEscena={seleccionarEscena} eliminarEscena={eliminarEscena} 
       />
 
       <div className="flex-1 flex flex-col bg-slate-950 relative">
@@ -492,6 +290,7 @@ function App() {
             )}
           </header>
 
+          {/* Construcción Rápida */}
           <div className="bg-slate-900/80 p-5 rounded-xl border border-sky-900/50 shadow-lg shadow-sky-900/10 mb-4 backdrop-blur-sm">
              <label className="block text-sm font-bold text-sky-400 mb-3 flex items-center gap-2">✨ Construcción Rápida</label>
              <div className="flex flex-col sm:flex-row gap-3">
@@ -502,6 +301,7 @@ function App() {
              </div>
           </div>
 
+          {/* Opciones Avanzadas */}
           <details className="group mb-6 bg-slate-900/40 p-4 rounded-xl border border-slate-800/50 backdrop-blur-sm transition-all open:bg-slate-900/60 open:border-slate-700">
             <summary className="cursor-pointer text-slate-400 hover:text-slate-300 text-xs font-semibold uppercase tracking-wider flex items-center gap-2 select-none outline-none">
                ⚙️ Opciones Avanzadas <span className="text-slate-600 group-open:rotate-180 transition-transform">▼</span>
@@ -510,32 +310,31 @@ function App() {
             <div className="mt-5 pt-4 border-t border-slate-800/50">
               <div className="mb-6 p-4 bg-slate-800/50 rounded-lg border border-dashed border-sky-500/30 text-center relative hover:bg-slate-800 transition-colors group/upload">
                 <span className="text-sm font-bold text-sky-400 block pointer-events-none group-hover/upload:text-sky-300 transition-colors">🎴 Subir Tarjeta PNG (Tavern)</span>
-                <p className="text-xs text-slate-500 mt-1 pointer-events-none">Haz clic para autocompletar lore y personalidad.</p>
-                <input type="file" accept=".png" onChange={subirTarjetaTavern} title="Sube una tarjeta" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                <input type="file" accept=".png" onChange={subirTarjetaTavern} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div><label className="block text-xs text-slate-500 mb-1.5 font-medium">Personaje</label><input type="text" value={personaje} onChange={(e) => setPersonaje(e.target.value)} className="w-full p-2 bg-slate-950 border border-slate-800 rounded-md text-sm text-slate-300 focus:border-sky-500 outline-none" /></div>
-                <div><label className="block text-xs text-slate-500 mb-1.5 font-medium">Universo</label><input type="text" value={universo} onChange={(e) => setUniverso(e.target.value)} className="w-full p-2 bg-slate-950 border border-slate-800 rounded-md text-sm text-slate-300 focus:border-sky-500 outline-none" /></div>
-                <div><label className="block text-xs text-slate-500 mb-1.5 font-medium">Temática</label><input type="text" value={tematica} onChange={(e) => setTematica(e.target.value)} className="w-full p-2 bg-slate-950 border border-slate-800 rounded-md text-sm text-slate-300 focus:border-sky-500 outline-none" /></div>
+                <div><label className="block text-xs text-slate-500 mb-1.5">Personaje</label><input type="text" value={personaje} onChange={(e) => setPersonaje(e.target.value)} className="w-full p-2 bg-slate-950 border border-slate-800 rounded-md text-sm outline-none" /></div>
+                <div><label className="block text-xs text-slate-500 mb-1.5">Universo</label><input type="text" value={universo} onChange={(e) => setUniverso(e.target.value)} className="w-full p-2 bg-slate-950 border border-slate-800 rounded-md text-sm outline-none" /></div>
+                <div><label className="block text-xs text-slate-500 mb-1.5">Temática</label><input type="text" value={tematica} onChange={(e) => setTematica(e.target.value)} className="w-full p-2 bg-slate-950 border border-slate-800 rounded-md text-sm outline-none" /></div>
               </div>
 
               <div className="mt-4">
-                <label className="block text-xs text-slate-500 mb-1.5 font-medium">Tu Perfil (Jugador)</label>
-                <input type="text" value={perfilJugador} onChange={(e) => setPerfilJugador(e.target.value)} className="w-full p-2 bg-slate-950 border border-slate-800 rounded-md text-sm text-slate-300 focus:border-sky-500 outline-none" />
+                <label className="block text-xs text-slate-500 mb-1.5">Tu Perfil (Jugador)</label>
+                <input type="text" value={perfilJugador} onChange={(e) => setPerfilJugador(e.target.value)} className="w-full p-2 bg-slate-950 border border-slate-800 rounded-md text-sm outline-none" />
               </div>
-              
               <div className="mt-4">
-                 <label className="block text-xs text-amber-500/70 mb-1.5 font-medium">Reglas Absolutas (Desarrollador)</label>
-                 <textarea value={detallesExtra} onChange={(e) => setDetallesExtra(e.target.value)} rows="2" className="w-full p-2 bg-slate-950 border border-amber-900/30 rounded-md text-sm text-amber-500/90 focus:border-amber-500/50 outline-none resize-y" />
+                 <label className="block text-xs text-amber-500/70 mb-1.5">Reglas Absolutas</label>
+                 <textarea value={detallesExtra} onChange={(e) => setDetallesExtra(e.target.value)} rows="2" className="w-full p-2 bg-slate-950 border border-amber-900/30 rounded-md text-sm text-amber-500/90 outline-none" />
               </div>
 
               <div className="flex justify-end mt-4">
-                <button onClick={cargarIdentidadAEstado} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md text-xs font-semibold transition-colors flex items-center gap-2">➡️ Cargar a Memoria</button>
+                <button onClick={cargarIdentidadAEstado} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md text-xs font-semibold">➡️ Cargar a Memoria</button>
               </div>
             </div>
           </details>
 
+          {/* Área de Chat */}
           <div className="flex-1 overflow-y-auto bg-slate-900/60 p-4 md:p-6 rounded-xl mb-2 border border-slate-800 flex flex-col gap-4 backdrop-blur-sm custom-scrollbar shadow-inner">
             {groupedMessages.length === 0 ? (
                <div className="flex-1 flex flex-col items-center justify-center text-slate-600 opacity-60">
@@ -544,28 +343,11 @@ function App() {
                </div>
             ) : groupedMessages.map((group, index) => {
               if (group.type === 'user') {
-                return (
-                  <MensajeUsuario 
-                    key={`usr_${group.id}`}
-                    msg={group} 
-                    onEdit={guardarEdicionYReenviar} 
-                    onDelete={borrarMensaje} 
-                    onClone={clonarLineaTemporal} 
-                  />
-                );
+                return <MensajeUsuario key={`usr_${group.id}`} msg={group} onEdit={guardarEdicion} onDelete={borrarMensaje} onClone={clonarLineaTemporal} />;
               } else {
                 const mensajePrevio = groupedMessages[index - 1];
-                const textoQuePasoAntes = mensajePrevio && mensajePrevio.type === 'user' ? mensajePrevio.contenido : '(Continúa la escena)';
-                return (
-                  <GrupoIA 
-                    key={`ai_${group.alts[0].id}`} 
-                    alts={group.alts} 
-                    onEdit={guardarEdicion} 
-                    onDelete={borrarMensaje} 
-                    onRegenerate={() => regenerarRespuesta(textoQuePasoAntes)} 
-                    onClone={clonarLineaTemporal} 
-                  />
-                );
+                const textoAnterior = mensajePrevio && mensajePrevio.type === 'user' ? mensajePrevio.contenido : '(Continúa)';
+                return <GrupoIA key={`ai_${group.alts[0].id}`} alts={group.alts} onEdit={guardarEdicion} onDelete={borrarMensaje} onRegenerate={() => manejarRegeneracion(textoAnterior)} onClone={clonarLineaTemporal} />;
               }
             })}
             
@@ -579,20 +361,19 @@ function App() {
                   <span className="text-xs text-sky-400">Escuchando a la IA...</span>
                </div>
             )}
-
-            {/* 👇 ANCLA INVISIBLE PARA EL AUTO-SCROLL 👇 */}
             <div ref={mensajesEndRef} />
           </div>
 
+          {/* Comandos Rápidos */}
           <div className="flex gap-2 mb-2 px-1">
-             <button type="button" onClick={() => setMensaje(prev => prev + "/orden ")} className="px-2 py-1 bg-fuchsia-900/40 hover:bg-fuchsia-800/60 text-fuchsia-400 border border-fuchsia-700/50 rounded text-[10px] font-bold uppercase tracking-wider transition-colors">🎬 Orden al Sistema</button>
-             <button type="button" onClick={() => setMensaje(prev => prev + "/forzar ")} className="px-2 py-1 bg-amber-900/40 hover:bg-amber-800/60 text-amber-400 border border-amber-700/50 rounded text-[10px] font-bold uppercase tracking-wider transition-colors">⚡ Forzar Evento</button>
-             <button type="button" onClick={() => setMensaje(prev => prev + "/accion ")} className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600 rounded text-[10px] font-bold uppercase tracking-wider transition-colors">🏃 Acción</button>
+             <button type="button" onClick={() => setMensaje(prev => prev + "/orden ")} className="px-2 py-1 bg-fuchsia-900/40 text-fuchsia-400 border border-fuchsia-700/50 rounded text-[10px] font-bold uppercase">🎬 Orden</button>
+             <button type="button" onClick={() => setMensaje(prev => prev + "/forzar ")} className="px-2 py-1 bg-amber-900/40 text-amber-400 border border-amber-700/50 rounded text-[10px] font-bold uppercase">⚡ Forzar</button>
+             <button type="button" onClick={() => setMensaje(prev => prev + "/accion ")} className="px-2 py-1 bg-slate-800 text-slate-300 border border-slate-600 rounded text-[10px] font-bold uppercase">🏃 Acción</button>
           </div>
 
-          <form onSubmit={enviarMensaje} className="flex gap-3 relative">
-            <input type="text" value={mensaje} onChange={(e) => setMensaje(e.target.value)} placeholder="Escribe un diálogo o usa /accion, /orden, /forzar..." className="flex-1 p-4 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 placeholder:text-slate-500 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none shadow-lg transition-all" />
-            <button type="submit" disabled={cargando} className="px-6 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-xl shadow-lg shadow-sky-900/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center">Enviar</button>
+          <form onSubmit={manejarEnvio} className="flex gap-3 relative">
+            <input type="text" value={mensaje} onChange={(e) => setMensaje(e.target.value)} placeholder="Escribe un diálogo o usa /accion, /orden..." className="flex-1 p-4 bg-slate-900 border border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-sky-500" />
+            <button type="submit" disabled={cargando} className="px-6 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-xl disabled:opacity-50">Enviar</button>
           </form>
         </div>
       </div>

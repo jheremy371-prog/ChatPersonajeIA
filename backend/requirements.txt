@@ -1,14 +1,18 @@
 # Servidor y API
-fastapi
-uvicorn
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+python-multipart>=0.0.6
 
-# Orquestación de IA y Memoria
-langchain
-langchain-community
+# Base de datos
+sqlalchemy>=2.0.0
+pydantic>=2.0.0
+python-dotenv>=1.0.0
 
-# Bases de Datos
-sqlalchemy       # Para manejar SQLite fácilmente mediante código
-chromadb         # Para la base de datos vectorial del Universo (Lorebook)
+# Inteligencia Artificial y RAG
+langchain>=0.1.0
+langchain-core>=0.1.0
+langchain-ollama>=0.0.1
+chromadb>=0.4.0
 
-# Utilidades
-python-dotenv    # Para leer variables de entorno   
+# Procesamiento de Archivos (Tavern Cards)
+pillow>=10.0.0

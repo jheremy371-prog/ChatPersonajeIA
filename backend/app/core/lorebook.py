@@ -3,13 +3,13 @@ from functools import lru_cache
 import chromadb
 from chromadb.utils import embedding_functions
 
-# 1. Inicialización del cliente persistente de ChromaDB para guardar la base de datos vectorial en disco[cite: 3, 4]
+# 1. Inicialización del cliente persistente de ChromaDB para guardar la base de datos vectorial en disco
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
 
-# Usar una función de embeddings explícita para transformar textos en vectores matemáticos[cite: 3, 4]
+# Usar una función de embeddings explícita para transformar textos en vectores matemáticos
 default_ef = embedding_functions.DefaultEmbeddingFunction()
 
-# Crear o recuperar la colección aislada para el Lorebook[cite: 3, 4]
+# Crear o recuperar la colección aislada para el Lorebook
 collection = chroma_client.get_or_create_collection(
     name="lorebook", 
     embedding_function=default_ef
@@ -18,29 +18,29 @@ collection = chroma_client.get_or_create_collection(
 def limpiar_query(query: str) -> str:
     """
     Elimina marcas de rol (*acción*, [instrucciones], -diálogos-) de la consulta del usuario.
-    Esto permite que la búsqueda vectorial se enfoque únicamente en conceptos clave y evite ruido[cite: 3, 4].
+    Esto permite que la búsqueda vectorial se enfoque únicamente en conceptos clave y evite ruido.
     """
-    # Nota explicativa: Usa expresiones regulares para eliminar texto entre asteriscos o corchetes[cite: 3, 4]
-    texto_limpio = re.sub(r'\*.*?\*|\\[.*?\\]', '', query)
+    # Usa expresiones regulares para eliminar texto entre asteriscos o corchetes
+    texto_limpio = re.sub(r'\*.*?\*|\[.*?\]', '', query)
     
-    # Nota explicativa: Elimina guiones de diálogo y espacios sobrantes en los extremos[cite: 3, 4]
+    # Elimina guiones de diálogo y espacios sobrantes en los extremos
     texto_limpio = re.sub(r'[-–—]', ' ', texto_limpio).strip()
     
-    # Si tras la limpieza el texto queda vacío, devuelve el query original para no perder la búsqueda[cite: 3, 4]
+    # Si tras la limpieza el texto queda vacío, devuelve el query original para no perder la búsqueda
     return texto_limpio if texto_limpio else query
 
 def agregar_entrada_lore(id_documento: str, texto_lore: str, id_escena: int):
     """
-    Guarda un documento de lore asociándolo a un universo o escena específica (id_escena)[cite: 3, 4].
+    Guarda un documento de lore asociándolo a un universo o escena específica (id_escena).
     """
     try:
         collection.add(
             documents=[texto_lore],
-            metadatas=[{"id_escena": id_escena}],  # Nota: Metadato clave para aislar las partidas[cite: 3, 4]
-            ids=[f"{id_escena}_{id_documento}"]      # Nota: ID único compuesto por escena y documento[cite: 3, 4]
+            metadatas=[{"id_escena": id_escena, "titulo": id_documento}],  # Guardamos el título en metadatos para evitar parsear IDs
+            ids=[f"{id_escena}_{id_documento}"]      # ID único compuesto por escena y documento
         )
         
-        # Nota: Invalidamos la caché de búsquedas al inyectar nueva información para mantener los datos actualizados[cite: 3, 4]
+        # Invalidamos la caché de búsquedas al inyectar nueva información para mantener los datos actualizados
         buscar_contexto_cacheado.cache_clear()
         return "Lore guardado correctamente."
     except Exception as e:
@@ -55,21 +55,22 @@ def buscar_contexto_cacheado(query_limpio: str, id_escena: int, max_distancia: f
             query_texts=[query_limpio],
             n_results=1,
             where={"id_escena": id_escena},
-            # 👈 AÑADIMOS "ids" PARA RECUPERAR EL NOMBRE DEL DOCUMENTO
-            include=["documents", "distances", "ids"] 
+            include=["documents", "metadatas", "distances"] # CORRECCIÓN AQUÍ
         )
         
         if resultados and resultados.get('documents') and resultados['documents']:
-            distancia = resultados['distances'][0][0]
-            documento = resultados['documents'][0][0]
-            id_crudo = resultados['ids'][0][0] # Ej: "999_test_dragon"
-            
-            # Limpiamos el ID (quitamos el prefijo de la escena para que quede solo el título)
-            nombre_doc = id_crudo.split('_', 1)[1] if '_' in id_crudo else id_crudo
-            
-            if distancia <= max_distancia:
-                # 👈 AHORA DEVOLVEMOS UN DICCIONARIO
-                return {"texto": documento, "fuente": nombre_doc} 
+            # Verificamos que la lista interna no esté vacía antes de acceder
+            if len(resultados['documents'][0]) > 0:
+                distancia = resultados['distances'][0][0]
+                documento = resultados['documents'][0][0]
+                
+                # Extraemos la fuente desde los metadatos de forma segura en lugar de los IDs
+                metadatos = resultados['metadatas'][0][0]
+                nombre_doc = metadatos.get("titulo", "Documento RAG") if metadatos else "Documento RAG"
+                
+                if distancia <= max_distancia:
+                    # Devolvemos un diccionario que la IA inyectará
+                    return {"texto": documento, "fuente": nombre_doc} 
         return None
     except Exception as e:
         print(f"⚠️ Error al buscar en ChromaDB: {e}")

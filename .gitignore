@@ -1,7 +1,14 @@
+# Entornos y dependencias
 venv/
+env/
 node_modules/
 __pycache__/
+
+# Bases de datos y variables sensibles
 *.db
 chroma_db/
 .env
+
+# Archivos temporales y del sistema
 temp_*.png
+.DS_Store

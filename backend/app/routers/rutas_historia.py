@@ -7,9 +7,6 @@ from app.database.database import SessionLocal
 from app.models import models
 from app.core.lorebook import agregar_entrada_lore
 
-# 👇 Importamos la memoria RAM viva de LangChain para poder limpiarla
-from app.routers.rutas_ia import cadenas_activas 
-
 router = APIRouter()
 
 def get_db():
@@ -76,11 +73,6 @@ def eliminar_escena(id_escena: int, db: Session = Depends(get_db)):
     db.delete(escena)
     db.commit()
     
-    # 🧹 ELIMINADOR DE FANTASMAS EN RAM (Aventura Completa)
-    llave = f"escena_{id_escena}"
-    if llave in cadenas_activas:
-        del cadenas_activas[llave]
-
     return {"estado": "éxito"}
 
 
@@ -91,17 +83,10 @@ def eliminar_mensaje(id_mensaje: int, db: Session = Depends(get_db)):
     if not mensaje:
         raise HTTPException(status_code=404, detail="Mensaje no encontrado")
         
-    id_escena = mensaje.id_escena 
-    
     db.delete(mensaje)
     db.commit()
 
-    # 🧹 ELIMINADOR DE FANTASMAS EN RAM (Mensaje Individual)
-    llave = f"escena_{id_escena}"
-    if llave in cadenas_activas:
-        del cadenas_activas[llave] # Obliga a LangChain a olvidar y recargar desde SQLite
-
-    return {"estado": "éxito", "detalle": "Mensaje y caché eliminados"}
+    return {"estado": "éxito", "detalle": "Mensaje eliminado"}
 
 @router.put("/api/mensajes/{id_mensaje}")
 def editar_mensaje(id_mensaje: int, req: MensajeUpdate, db: Session = Depends(get_db)):
@@ -110,13 +95,7 @@ def editar_mensaje(id_mensaje: int, req: MensajeUpdate, db: Session = Depends(ge
         raise HTTPException(status_code=404, detail="Mensaje no encontrado")
     
     mensaje.contenido = req.contenido
-    id_escena = mensaje.id_escena
     db.commit()
-
-    # 🧹 ELIMINADOR DE FANTASMAS EN RAM (Al editar también reseteamos memoria)
-    llave = f"escena_{id_escena}"
-    if llave in cadenas_activas:
-        del cadenas_activas[llave] 
         
     return {"estado": "éxito"}
 
@@ -165,44 +144,30 @@ def exportar_escena(id_escena: int, db: Session = Depends(get_db)):
     return export_data
 
 # --- ENDPOINT DE MULTIVERSO (BIFURCACIÓN TEMPORAL) ---
+# Reemplaza el endpoint de clonación al final de rutas_historia.py
+
 @router.post("/api/escenas/{id_escena}/clonar/{id_mensaje}")
 def clonar_linea_temporal(id_escena: int, id_mensaje: int, db: Session = Depends(get_db)):
-    # 1. Buscar la escena original
     escena_orig = db.query(models.Escena).filter(models.Escena.id == id_escena).first()
     if not escena_orig:
         raise HTTPException(status_code=404, detail="Escena no encontrada")
 
-    # 2. Crear la nueva escena paralela
+    # 1. Creamos la nueva rama que apunta al pasado
     nueva_escena = models.Escena(
-        nombre_escena=f"{escena_orig.nombre_escena} (Bifurcación)",
+        nombre_escena=f"Hilos del Destino ({escena_orig.nombre_escena})",
         estado="activa",
-        contexto_inicial=escena_orig.contexto_inicial
+        id_personaje=escena_orig.id_personaje, # Hereda el personaje
+        perfil_jugador=escena_orig.perfil_jugador,
+        contexto_inicial=escena_orig.contexto_inicial,
+        resumen_contexto=escena_orig.resumen_contexto,
+        # 👇 MAGIA DEL MULTIVERSO: Enlazamos con el punto de inflexión
+        escena_padre_id=id_escena,
+        mensaje_bifurcacion_id=id_mensaje 
     )
     db.add(nueva_escena)
     db.commit()
     db.refresh(nueva_escena)
 
-    # 3. Clonar los mensajes HASTA el mensaje seleccionado (inclusive)
-    mensajes = db.query(models.Mensaje).filter(
-        models.Mensaje.id_escena == id_escena, 
-        models.Mensaje.id <= id_mensaje
-    ).order_by(models.Mensaje.id.asc()).all()
-    
-    for m in mensajes:
-        nuevo_msg = models.Mensaje(id_escena=nueva_escena.id, id_emisor=m.id_emisor, contenido=m.contenido)
-        db.add(nuevo_msg)
-
-    # 4. Clonar el Compendio (Entidades)
-    entidades = db.query(models.Entidad).filter(models.Entidad.id_escena == id_escena).all()
-    for e in entidades:
-        nueva_ent = models.Entidad(id_escena=nueva_escena.id, nombre=e.nombre, tipo=e.tipo, descripcion=e.descripcion)
-        db.add(nueva_ent)
-
-    # 5. Clonar las Crónicas
-    cronicas = db.query(models.CronicaHistoria).filter(models.CronicaHistoria.id_escena == id_escena).all()
-    for c in cronicas:
-        nueva_cro = models.CronicaHistoria(id_escena=nueva_escena.id, titulo_capitulo=c.titulo_capitulo, contenido_narrativo=c.contenido_narrativo)
-        db.add(nueva_cro)
-
-    db.commit()
+    # Ya no clonamos ni un solo mensaje, ni una entidad, ni una crónica. 
+    # Todo se leerá dinámicamente. Ahorro de base de datos = 100%.
     return {"estado": "éxito", "nueva_escena_id": nueva_escena.id}
