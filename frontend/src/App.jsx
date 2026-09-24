@@ -6,7 +6,7 @@ import { api } from './services/api';
 import { useChat } from './hooks/useChat';
 
 function App() {
-  // 1. ESTADOS DE CONFIGURACIÓN DEL PERSONAJE
+  // 1. ESTADOS DE CONFIGURACIÓN DEL PERSONAJE/PARTY
   const [personaje, setPersonaje] = useState('');
   const [universo, setUniverso] = useState('');
   const [tematica, setTematica] = useState('');
@@ -27,18 +27,21 @@ function App() {
   const [pestañaDerecha, setPestañaDerecha] = useState('memoria'); 
   const [loreTitulo, setLoreTitulo] = useState('');
   const [loreTexto, setLoreTexto] = useState('');
+  
+  // NUEVOS ESTADOS DE UI INMERSIVA
+  const [mostrarAjustes, setMostrarAjustes] = useState(false);
+  const [orquestando, setOrquestando] = useState(false);
+  const [panelDerechoAbierto, setPanelDerechoAbierto] = useState(false);
 
   // 3. AUTO-SCROLL INTELIGENTE
   const mensajesEndRef = useRef(null);
   const scrollToBottom = () => mensajesEndRef.current?.scrollIntoView({ behavior: "smooth" });
 
-  // 4. FUNCIONES AUXILIARES PARA EL HOOK DE CHAT
   const recargarEntidadesYCronicas = (id) => {
     cargarEntidades(id);
     cargarCronicas(id);
   };
 
-  // 👇 INYECCIÓN DEL CUSTOM HOOK DE STREAMING 👇
   const { mensajes, setMensajes, cargando, enviar, regenerar } = useChat(escenaActiva, recargarEntidadesYCronicas);
 
   useEffect(() => { scrollToBottom(); }, [mensajes]);
@@ -55,6 +58,8 @@ function App() {
 
   const seleccionarEscena = async (id) => {
     setEscenaActiva(id);
+    setMostrarAjustes(false); 
+    setPanelDerechoAbierto(false); 
     try {
       const dataChat = await api.getHistorial(id);
       setMensajes(dataChat.mensajes || []);
@@ -93,79 +98,31 @@ function App() {
     } catch (error) { alert("Error al eliminar la escena."); }
   };
 
-  const exportarAventura = async () => {
-    if (!escenaActiva) return;
-    try {
-      const data = await api.exportarEscena(escenaActiva);
-      if (data.error) return alert(data.error);
-
-      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(data, null, 2));
-      const downloadAnchorNode = document.createElement('a');
-      downloadAnchorNode.setAttribute("href", dataStr);
-      downloadAnchorNode.setAttribute("download", `Backup_${data.aventura.replace(/\s+/g, '_')}.json`);
-      document.body.appendChild(downloadAnchorNode); 
-      downloadAnchorNode.click();
-      downloadAnchorNode.remove();
-    } catch (error) { alert("Error al exportar."); }
-  };
-
   // --- SERVICIOS DE PANEL DERECHO Y LORE ---
-  const cargarCronicas = async (id) => {
-    if (!id) return;
-    try {
-      const data = await api.getCronicas(id);
-      setCronicas(Array.isArray(data) ? data : []);
-    } catch (error) { setCronicas([]); }
-  };
-
-  const cargarEntidades = async (id) => {
-    if (!id) return;
-    try {
-      const data = await api.getEntidades(id);
-      setEntidades(Array.isArray(data) ? data : []);
-    } catch (error) { setEntidades([]); }
-  };
-
+  const cargarCronicas = async (id) => { try { const data = await api.getCronicas(id); setCronicas(Array.isArray(data) ? data : []); } catch (error) { setCronicas([]); } };
+  const cargarEntidades = async (id) => { try { const data = await api.getEntidades(id); setEntidades(Array.isArray(data) ? data : []); } catch (error) { setEntidades([]); } };
+  
   const registrarEntidad = async () => {
     if (!escenaActiva || !nuevaEntidad.nombre) return;
-    try {
-      await api.crearEntidad({ ...nuevaEntidad, id_escena: escenaActiva });
-      setNuevaEntidad({ nombre: '', tipo: 'Personaje', descripcion: '' });
-      cargarEntidades(escenaActiva);
-    } catch (error) { alert("Error al registrar entidad."); }
+    try { await api.crearEntidad({ ...nuevaEntidad, id_escena: escenaActiva }); setNuevaEntidad({ nombre: '', tipo: 'Personaje', descripcion: '' }); cargarEntidades(escenaActiva); } catch (error) { alert("Error al registrar entidad."); }
   };
 
-  const guardarLorebook = async () => {
-    if (!escenaActiva) return alert("Selecciona una partida primero.");
-    if (!loreTitulo || !loreTexto) return alert("Falta título o contenido.");
-    try {
-      await api.guardarLore({ id_escena: escenaActiva, id_documento: loreTitulo, texto_lore: loreTexto });
-      alert("📖 Lore inyectado exitosamente en ESTE universo.");
-      setLoreTitulo(''); setLoreTexto('');
-    } catch (error) { alert("Error al guardar Lore."); }
-  };
+  const guardarLorebook = async () => { /* ... */ };
+  const editarEntidadExistente = async (id, nuevosDatos) => { /* ... */ };
 
-  // --- SERVICIOS DE CHAT Y MULTIVERSO ---
   const borrarMensaje = async (id_mensaje) => {
     if (!window.confirm("¿Eliminar este mensaje permanentemente?")) return;
-    await api.borrarMensaje(id_mensaje);
-    seleccionarEscena(escenaActiva); 
+    await api.borrarMensaje(id_mensaje); seleccionarEscena(escenaActiva); 
   };
 
   const guardarEdicion = async (id_mensaje, nuevoTexto) => {
-    await api.editarMensaje(id_mensaje, nuevoTexto);
-    seleccionarEscena(escenaActiva); 
+    await api.editarMensaje(id_mensaje, nuevoTexto); seleccionarEscena(escenaActiva); 
   };
 
-  const clonarLineaTemporal = async (id_mensaje) => {
-    if (!window.confirm("🌌 ¿Crear una línea temporal alternativa desde este punto?")) return;
-    try {
-      const data = await api.clonarEscena(escenaActiva, id_mensaje);
-      if (data.nueva_escena_id) {
-        await cargarEscenas(); 
-        seleccionarEscena(data.nueva_escena_id); 
-      }
-    } catch (error) { alert("Error al bifurcar la línea temporal."); }
+  const clonarLineaTemporal = async (id_mensaje) => { /* ... */ };
+
+  const convocarEntidad = (entidad) => {
+    setMensaje(`[ACCION DEL SISTEMA: El Director introduce a la escena a '${entidad.nombre}' (${entidad.tipo}). Detalles: ${entidad.descripcion}.] `);
   };
 
   // --- SERVICIOS DE IA AVANZADOS ---
@@ -179,212 +136,230 @@ function App() {
         if(data.universo) setUniverso(data.universo);
         if(data.tematica) setTematica(data.tematica);
         if(data.detalles_extra) setDetallesExtra(data.detalles_extra);
-        if(data.titulo_partida) {
-          await api.editarMensaje(escenaActiva, data.titulo_partida); // Reutilizamos lógica si es necesario, o recargamos
-          cargarEscenas(); 
-        }
         setTextoMagico(''); 
       }
     } catch (error) { alert("Error aplicando la magia del director."); } 
     finally { setProcesandoMagia(false); }
   };
 
-  const autoActualizarMemoria = async (memoriaActualParaEnviar) => {
-    if (!escenaActiva) return; 
-    setActualizandoMemoria(true);
-    try {
-      const data = await api.sintetizarMemoria({ id_escena: escenaActiva, memoria_actual: memoriaActualParaEnviar });
-      if (data.nueva_memoria) setMemoriaRol(data.nueva_memoria);
-    } catch (error) { alert("Error al actualizar memoria."); } 
-    finally { setActualizandoMemoria(false); }
-  };
+  const autoActualizarMemoria = async (memoriaActualParaEnviar) => { /* ... */ };
 
   const subirTarjetaTavern = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
     const boton = e.target.previousSibling;
     if (boton) boton.innerText = "⏳ Leyendo...";
-
-    const formData = new FormData();
-    formData.append('archivo', file);
-
+    const formData = new FormData(); formData.append('archivo', file);
     try {
       const data = await api.leerTavern(formData);
-      if (data.error) {
-        alert(data.error);
-      } else {
+      if (!data.error) {
         if (data.nombre) setPersonaje(data.nombre);
         if (data.escenario) setUniverso(data.escenario);
-        if (data.personalidad || data.descripcion) {
-          setDetallesExtra(`[PERSONALIDAD]\n${data.personalidad}\n\n[DESCRIPCIÓN]\n${data.descripcion}`);
-        }
-        alert(`¡Alma de ${data.nombre} extraída con éxito!`);
+        if (data.personalidad || data.descripcion) setDetallesExtra(`[PERSONALIDAD]\n${data.personalidad}\n\n[DESCRIPCIÓN]\n${data.descripcion}`);
+        setMostrarAjustes(false); 
       }
-    } catch (error) {
-      alert("Error al leer la tarjeta.");
-    } finally {
-      if (boton) boton.innerText = "🎴 Subir PNG (Tavern)";
-      e.target.value = null;
+    } catch (error) { alert("Error al leer la tarjeta."); } finally {
+      if (boton) boton.innerText = "🎴 Subir PNG (Tavern)"; e.target.value = null;
     }
   };
 
-  // --- ENVOLTURAS PARA EL HOOK DE CHAT ---
+  // --- ENVÍO CON SISTEMA ORQUESTADOR ---
   const payloadActual = { personaje, universo, tematica, detalles_extra: detallesExtra, memoria_rol: memoriaRol, perfil_jugador: perfilJugador };
 
   const manejarEnvio = async (e) => {
     e.preventDefault();
-    await enviar(mensaje, payloadActual);
+    if (!mensaje.trim()) return;
+
+    const listaPersonajes = personaje.split(',').map(p => p.trim()).filter(p => p);
+    let personajeElegido = personaje;
+
+    if (listaPersonajes.length > 1) {
+      setOrquestando(true);
+      try {
+        const orq = await api.consultarOrquestador({ id_escena: escenaActiva, mensaje: mensaje, personajes_presentes: listaPersonajes });
+        if (orq.siguiente_turno) personajeElegido = orq.siguiente_turno;
+      } catch (error) { console.error("Error orquestador", error); personajeElegido = listaPersonajes[0]; }
+      setOrquestando(false);
+    }
+
+    const payloadGrupal = { ...payloadActual, personaje: personajeElegido };
+    const mensajeAEnviar = mensaje;
     setMensaje(''); 
+    await enviar(mensajeAEnviar, payloadGrupal);
   };
 
-  const manejarRegeneracion = async (textoAnterior) => {
-    await regenerar(textoAnterior, payloadActual);
-  };
+  const manejarRegeneracion = async (textoAnterior) => { await regenerar(textoAnterior, payloadActual); };
 
-  // --- HELPERS UI ---
-  const convocarEntidad = (entidad) => setMensaje(`[ACCION DEL SISTEMA: El Director introduce a la escena a '${entidad.nombre}' (${entidad.tipo}). Detalles: ${entidad.descripcion}.] `);
-  const cargarIdentidadAEstado = (e) => {
-    e.preventDefault();
-    setMemoriaRol(prev => prev + `\n[IDENTIDAD IA]\n- Personaje: ${personaje || 'No definido'}\n- Universo: ${universo || 'No definido'}\n`);
-    setPestañaDerecha('memoria');
-  };
+  // --- MODAL DE CONFIGURACIÓN AVANZADA ---
+  const FormularioConfiguracion = () => (
+    <div className="space-y-5 text-slate-300">
+      <div className="p-4 bg-slate-800/50 rounded-lg border border-dashed border-sky-500/30 text-center relative hover:bg-slate-800 cursor-pointer transition-colors">
+        <span className="text-sm font-bold text-sky-400">🎴 Subir Tarjeta PNG de Personaje (Formato Tavern)</span>
+        <input type="file" accept=".png" onChange={subirTarjetaTavern} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+      </div>
 
-  // AGRUPACIÓN VISUAL DE MENSAJES
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Personaje(s) - Separa con comas para Party</label>
+          <input type="text" value={personaje} onChange={(e) => setPersonaje(e.target.value)} placeholder="Ej: Batman, El Joker" className="w-full p-3 bg-slate-950 border border-slate-700 rounded-lg outline-none focus:border-sky-500 transition-colors" />
+        </div>
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Tu Perfil / Rol (Jugador)</label>
+          <input type="text" value={perfilJugador} onChange={(e) => setPerfilJugador(e.target.value)} placeholder="Ej: Soy Jim Gordon..." className="w-full p-3 bg-slate-950 border border-slate-700 rounded-lg outline-none focus:border-sky-500 transition-colors" />
+        </div>
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Universo / Escenario</label>
+          <input type="text" value={universo} onChange={(e) => setUniverso(e.target.value)} placeholder="Ej: Ciudad Gótica, Año Uno" className="w-full p-3 bg-slate-950 border border-slate-700 rounded-lg outline-none focus:border-sky-500 transition-colors" />
+        </div>
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Temática</label>
+          <input type="text" value={tematica} onChange={(e) => setTematica(e.target.value)} placeholder="Ej: Noir, Acción, Suspenso" className="w-full p-3 bg-slate-950 border border-slate-700 rounded-lg outline-none focus:border-sky-500 transition-colors" />
+        </div>
+      </div>
+      
+      <div>
+         <label className="block text-xs text-amber-500 mb-1 font-bold">Instrucciones y Reglas Absolutas (Inmutable)</label>
+         <textarea value={detallesExtra} onChange={(e) => setDetallesExtra(e.target.value)} rows="5" placeholder="Define la personalidad, restricciones, comportamiento, etc. La IA seguirá esto al pie de la letra." className="w-full p-3 bg-slate-950 border border-amber-900/50 rounded-lg text-sm text-amber-500/90 outline-none focus:border-amber-500 transition-colors" />
+      </div>
+    </div>
+  );
+
   const escenaActualObj = escenas.find(e => e.id === escenaActiva);
   const nombreEscenaHeader = escenaActualObj ? escenaActualObj.nombre : `Selecciona un Chat`;
-  
   const groupedMessages = [];
   for (let msg of mensajes) {
-    if (msg.emisor === 'Jugador') {
-      groupedMessages.push({ type: 'user', id: msg.id, contenido: msg.contenido });
-    } else {
-      const last = groupedMessages[groupedMessages.length - 1];
-      if (last && last.type === 'ai_group') last.alts.push(msg); 
-      else groupedMessages.push({ type: 'ai_group', alts: [msg] });
-    }
+    if (msg.emisor === 'Jugador') groupedMessages.push({ type: 'user', id: msg.id, contenido: msg.contenido });
+    else { const last = groupedMessages[groupedMessages.length - 1]; if (last && last.type === 'ai_group') last.alts.push(msg); else groupedMessages.push({ type: 'ai_group', alts: [msg] }); }
   }
 
+  const modoPreparacion = mensajes.length === 0 && escenaActiva !== null;
+
+  const abrirPestaña = (pestaña) => {
+    if (panelDerechoAbierto && pestañaDerecha === pestaña) {
+      setPanelDerechoAbierto(false); 
+    } else {
+      setPestañaDerecha(pestaña);
+      setPanelDerechoAbierto(true);
+    }
+  };
+
   return (
-    <div className="flex h-screen w-screen bg-slate-950 text-slate-200 font-sans overflow-hidden">
+    <div className="flex h-screen w-screen bg-[#0a0a0a] text-slate-200 font-sans overflow-hidden">
       
-      <Sidebar 
-        escenas={escenas} escenaActiva={escenaActiva} 
-        crearNuevaEscena={crearNuevaEscena} seleccionarEscena={seleccionarEscena} eliminarEscena={eliminarEscena} 
-      />
+      <Sidebar escenas={escenas} escenaActiva={escenaActiva} crearNuevaEscena={crearNuevaEscena} seleccionarEscena={seleccionarEscena} eliminarEscena={eliminarEscena} />
 
-      <div className="flex-1 flex flex-col bg-slate-950 relative">
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-slate-950 opacity-50 pointer-events-none"></div>
-
-        <div className="flex-1 flex flex-col max-w-4xl w-full mx-auto p-4 md:p-6 z-10 h-full">
-          
-          <header className="flex justify-between items-center mb-6 bg-slate-900/50 p-4 rounded-xl border border-slate-800 backdrop-blur-sm">
-            <div>
-              <p className="text-sm text-slate-400">Hablando con <span className="text-indigo-400 font-bold">{personaje || '???'}</span></p>
-              <p className="text-xs text-amber-500/80 mt-1">{nombreEscenaHeader}</p>
-            </div>
-            {escenaActiva && (
-              <button onClick={exportarAventura} className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-md text-xs font-semibold transition-colors">
-                💾 Backup
-              </button>
-            )}
-          </header>
-
-          {/* Construcción Rápida */}
-          <div className="bg-slate-900/80 p-5 rounded-xl border border-sky-900/50 shadow-lg shadow-sky-900/10 mb-4 backdrop-blur-sm">
-             <label className="block text-sm font-bold text-sky-400 mb-3 flex items-center gap-2">✨ Construcción Rápida</label>
-             <div className="flex flex-col sm:flex-row gap-3">
-               <textarea value={textoMagico} onChange={(e) => setTextoMagico(e.target.value)} rows="1" placeholder='Ej: "Quiero hablar con Batman..."' className="flex-1 p-3 bg-slate-950 text-slate-200 border border-slate-700 rounded-lg text-sm focus:ring-2 focus:ring-sky-500 outline-none resize-none transition-all placeholder:text-slate-600" />
-               <button onClick={aplicarMagiaDirector} disabled={procesandoMagia} className="px-6 py-2 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-lg shadow-lg shadow-sky-900/20 transition-all whitespace-nowrap disabled:opacity-50">
-                 {procesandoMagia ? 'Configurando...' : 'Configurar'}
+      {/* ÁREA CENTRAL */}
+      <div className="flex-1 flex flex-col relative h-full">
+        
+        <header className="absolute top-0 w-full p-4 flex justify-between items-center z-20 pointer-events-none">
+           <div className="pointer-events-auto flex items-center gap-4">
+              <span className="text-xs uppercase tracking-widest text-slate-500 font-bold">Aventura</span>
+              <span className="text-sm text-amber-500/90 bg-amber-950/30 px-3 py-1 rounded-full border border-amber-900/30">
+                {nombreEscenaHeader}
+              </span>
+           </div>
+           
+           <div className="pointer-events-auto flex gap-2">
+             {escenaActiva && (
+               <button onClick={() => setMostrarAjustes(true)} className="p-2 bg-slate-900/50 hover:bg-slate-800 text-slate-400 hover:text-white rounded-full transition-colors border border-slate-800" title="Ajustes Avanzados de IA">
+                 ⚙️
                </button>
-             </div>
-          </div>
+             )}
+           </div>
+        </header>
 
-          {/* Opciones Avanzadas */}
-          <details className="group mb-6 bg-slate-900/40 p-4 rounded-xl border border-slate-800/50 backdrop-blur-sm transition-all open:bg-slate-900/60 open:border-slate-700">
-            <summary className="cursor-pointer text-slate-400 hover:text-slate-300 text-xs font-semibold uppercase tracking-wider flex items-center gap-2 select-none outline-none">
-               ⚙️ Opciones Avanzadas <span className="text-slate-600 group-open:rotate-180 transition-transform">▼</span>
-            </summary>
-            
-            <div className="mt-5 pt-4 border-t border-slate-800/50">
-              <div className="mb-6 p-4 bg-slate-800/50 rounded-lg border border-dashed border-sky-500/30 text-center relative hover:bg-slate-800 transition-colors group/upload">
-                <span className="text-sm font-bold text-sky-400 block pointer-events-none group-hover/upload:text-sky-300 transition-colors">🎴 Subir Tarjeta PNG (Tavern)</span>
-                <input type="file" accept=".png" onChange={subirTarjetaTavern} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-              </div>
+        <div className="flex-1 flex flex-col max-w-4xl w-full mx-auto p-4 md:px-8 z-10 h-full mt-16 pb-4">
+          
+          {modoPreparacion && (
+             <div className="flex-1 flex flex-col items-center justify-center animate-fade-in">
+                <div className="w-12 h-12 bg-slate-900 border border-slate-800 rounded-full flex items-center justify-center mb-8 shadow-lg">✨</div>
+                <h1 className="text-4xl md:text-5xl font-serif text-white mb-4 tracking-tight">Prepara tu Aventura</h1>
+                <p className="text-slate-400 text-center mb-10 max-w-lg">
+                  Describe el mundo que imaginas y deja que la historia tome forma.<br/>Los detalles llegan después.
+                </p>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div><label className="block text-xs text-slate-500 mb-1.5">Personaje</label><input type="text" value={personaje} onChange={(e) => setPersonaje(e.target.value)} className="w-full p-2 bg-slate-950 border border-slate-800 rounded-md text-sm outline-none" /></div>
-                <div><label className="block text-xs text-slate-500 mb-1.5">Universo</label><input type="text" value={universo} onChange={(e) => setUniverso(e.target.value)} className="w-full p-2 bg-slate-950 border border-slate-800 rounded-md text-sm outline-none" /></div>
-                <div><label className="block text-xs text-slate-500 mb-1.5">Temática</label><input type="text" value={tematica} onChange={(e) => setTematica(e.target.value)} className="w-full p-2 bg-slate-950 border border-slate-800 rounded-md text-sm outline-none" /></div>
-              </div>
-
-              <div className="mt-4">
-                <label className="block text-xs text-slate-500 mb-1.5">Tu Perfil (Jugador)</label>
-                <input type="text" value={perfilJugador} onChange={(e) => setPerfilJugador(e.target.value)} className="w-full p-2 bg-slate-950 border border-slate-800 rounded-md text-sm outline-none" />
-              </div>
-              <div className="mt-4">
-                 <label className="block text-xs text-amber-500/70 mb-1.5">Reglas Absolutas</label>
-                 <textarea value={detallesExtra} onChange={(e) => setDetallesExtra(e.target.value)} rows="2" className="w-full p-2 bg-slate-950 border border-amber-900/30 rounded-md text-sm text-amber-500/90 outline-none" />
-              </div>
-
-              <div className="flex justify-end mt-4">
-                <button onClick={cargarIdentidadAEstado} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md text-xs font-semibold">➡️ Cargar a Memoria</button>
-              </div>
-            </div>
-          </details>
-
-          {/* Área de Chat */}
-          <div className="flex-1 overflow-y-auto bg-slate-900/60 p-4 md:p-6 rounded-xl mb-2 border border-slate-800 flex flex-col gap-4 backdrop-blur-sm custom-scrollbar shadow-inner">
-            {groupedMessages.length === 0 ? (
-               <div className="flex-1 flex flex-col items-center justify-center text-slate-600 opacity-60">
-                 <span className="text-4xl mb-2">🎭</span>
-                 <p>La escena está lista. Comienza la aventura.</p>
-               </div>
-            ) : groupedMessages.map((group, index) => {
-              if (group.type === 'user') {
-                return <MensajeUsuario key={`usr_${group.id}`} msg={group} onEdit={guardarEdicion} onDelete={borrarMensaje} onClone={clonarLineaTemporal} />;
-              } else {
-                const mensajePrevio = groupedMessages[index - 1];
-                const textoAnterior = mensajePrevio && mensajePrevio.type === 'user' ? mensajePrevio.contenido : '(Continúa)';
-                return <GrupoIA key={`ai_${group.alts[0].id}`} alts={group.alts} onEdit={guardarEdicion} onDelete={borrarMensaje} onRegenerate={() => manejarRegeneracion(textoAnterior)} onClone={clonarLineaTemporal} />;
-              }
-            })}
-            
-            {cargando && mensajes.length > 0 && mensajes[mensajes.length - 1].emisor === 'Jugador' && (
-               <div className="self-start flex items-center gap-3 bg-slate-800/50 p-3 rounded-2xl rounded-tl-sm border border-slate-700">
-                  <div className="flex gap-1">
-                    <div className="w-2 h-2 bg-sky-500 rounded-full animate-bounce"></div>
-                    <div className="w-2 h-2 bg-sky-500 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
-                    <div className="w-2 h-2 bg-sky-500 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+                <div className="w-full bg-slate-900/40 border border-slate-800 rounded-2xl p-4 md:p-6 backdrop-blur-sm focus-within:border-sky-500/50 focus-within:ring-1 focus-within:ring-sky-500/50 transition-all duration-300">
+                  <textarea 
+                    value={textoMagico} onChange={(e) => setTextoMagico(e.target.value)} 
+                    placeholder='Ej: "Una partida de misterio en los años 20, con Sherlock y Watson tras un asesino..."' 
+                    className="w-full h-32 bg-transparent text-slate-200 text-lg resize-none outline-none placeholder:text-slate-600 custom-scrollbar" 
+                  />
+                  <div className="flex flex-col sm:flex-row justify-between items-center sm:items-end mt-4 gap-4 border-t border-slate-800/50 pt-4">
+                    <span className="text-xs text-slate-500">La IA construirá personajes, escenario y tono por ti.</span>
+                    <button onClick={aplicarMagiaDirector} disabled={procesandoMagia || !textoMagico.trim()} className="w-full sm:w-auto px-6 py-2 bg-slate-100 hover:bg-white text-slate-900 font-bold rounded-xl transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                      {procesandoMagia ? '✨ Tejiendo...' : '🪄 Crear mundo'}
+                    </button>
                   </div>
-                  <span className="text-xs text-sky-400">Escuchando a la IA...</span>
-               </div>
+                </div>
+             </div>
+          )}
+
+          {!modoPreparacion && (
+            <div className="flex-1 overflow-y-auto rounded-xl flex flex-col gap-6 custom-scrollbar pb-4 pr-2">
+              {groupedMessages.map((group, index) => {
+                if (group.type === 'user') return <MensajeUsuario key={`usr_${group.id}`} msg={group} onEdit={guardarEdicion} onDelete={borrarMensaje} onClone={clonarLineaTemporal} />;
+                else return <GrupoIA key={`ai_${group.alts[0].id}`} alts={group.alts} onEdit={guardarEdicion} onDelete={borrarMensaje} onRegenerate={() => manejarRegeneracion(groupedMessages[index - 1]?.contenido)} onClone={clonarLineaTemporal} />;
+              })}
+              {orquestando && <div className="self-start flex items-center gap-2 text-xs font-bold text-fuchsia-400 animate-pulse bg-fuchsia-900/20 px-3 py-1 rounded-full border border-fuchsia-900/50">🎬 El Director Orquestador está decidiendo quién habla...</div>}
+              {cargando && !orquestando && mensajes.length > 0 && mensajes[mensajes.length - 1].emisor === 'Jugador' && <div className="self-start flex items-center gap-3 text-slate-500 text-sm mt-2 font-serif italic"><span className="animate-pulse">Escribiendo...</span></div>}
+              <div ref={mensajesEndRef} />
+            </div>
+          )}
+
+          <div className="relative mt-4 shrink-0">
+            {!modoPreparacion && (
+              <div className="absolute -top-8 left-4 flex gap-2">
+                 <button onClick={() => setMensaje(prev => prev + "/orden ")} className="text-[10px] font-bold uppercase text-slate-400 hover:text-fuchsia-400 transition-colors">🎬 Orden</button>
+                 <button onClick={() => setMensaje(prev => prev + "/forzar ")} className="text-[10px] font-bold uppercase text-slate-400 hover:text-amber-400 transition-colors">⚡ Forzar</button>
+              </div>
             )}
-            <div ref={mensajesEndRef} />
+            <form onSubmit={manejarEnvio} className="flex gap-2 bg-slate-900/60 border border-slate-800 rounded-2xl p-2 backdrop-blur-md focus-within:border-slate-600 transition-colors">
+              <input type="text" value={mensaje} onChange={(e) => setMensaje(e.target.value)} placeholder={modoPreparacion ? "Escribe la primera escena para comenzar..." : "Tu turno..."} className="flex-1 bg-transparent px-4 text-slate-200 outline-none placeholder:text-slate-600" />
+              <button type="submit" disabled={cargando || orquestando || !mensaje.trim()} className="px-6 py-3 bg-slate-200 hover:bg-white text-slate-900 font-bold rounded-xl disabled:opacity-50 transition-colors flex items-center gap-2">{modoPreparacion ? 'Comenzar ➔' : 'Enviar ➔'}</button>
+            </form>
           </div>
-
-          {/* Comandos Rápidos */}
-          <div className="flex gap-2 mb-2 px-1">
-             <button type="button" onClick={() => setMensaje(prev => prev + "/orden ")} className="px-2 py-1 bg-fuchsia-900/40 text-fuchsia-400 border border-fuchsia-700/50 rounded text-[10px] font-bold uppercase">🎬 Orden</button>
-             <button type="button" onClick={() => setMensaje(prev => prev + "/forzar ")} className="px-2 py-1 bg-amber-900/40 text-amber-400 border border-amber-700/50 rounded text-[10px] font-bold uppercase">⚡ Forzar</button>
-             <button type="button" onClick={() => setMensaje(prev => prev + "/accion ")} className="px-2 py-1 bg-slate-800 text-slate-300 border border-slate-600 rounded text-[10px] font-bold uppercase">🏃 Acción</button>
-          </div>
-
-          <form onSubmit={manejarEnvio} className="flex gap-3 relative">
-            <input type="text" value={mensaje} onChange={(e) => setMensaje(e.target.value)} placeholder="Escribe un diálogo o usa /accion, /orden..." className="flex-1 p-4 bg-slate-900 border border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-sky-500" />
-            <button type="submit" disabled={cargando} className="px-6 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-xl disabled:opacity-50">Enviar</button>
-          </form>
         </div>
       </div>
 
-      <PanelDerecho 
-        pestañaDerecha={pestañaDerecha} setPestañaDerecha={setPestañaDerecha}
-        memoriaRol={memoriaRol} setMemoriaRol={setMemoriaRol} actualizandoMemoria={actualizandoMemoria} autoActualizarMemoria={autoActualizarMemoria} escenaActiva={escenaActiva}
-        nuevaEntidad={nuevaEntidad} setNuevaEntidad={setNuevaEntidad} registrarEntidad={registrarEntidad} entidades={entidades} convocarEntidad={convocarEntidad}
-        cargarCronicas={cargarCronicas} cronicas={cronicas}
-        loreTitulo={loreTitulo} setLoreTitulo={setLoreTitulo} loreTexto={loreTexto} setLoreTexto={setLoreTexto} guardarLorebook={guardarLorebook}
-      />
+      {/* 1. PANEL DERECHO DESLIZABLE (A la izquierda de la barra) */}
+      {panelDerechoAbierto && (
+        <div className="w-80 h-full border-l border-slate-800/50 bg-[#0a0a0a] shadow-[-10px_0_30px_-15px_rgba(0,0,0,0.8)] relative z-30 shrink-0 animate-fade-in flex flex-col overflow-hidden">
+           <PanelDerecho 
+              pestañaDerecha={pestañaDerecha} setPestañaDerecha={setPestañaDerecha} memoriaRol={memoriaRol} setMemoriaRol={setMemoriaRol} actualizandoMemoria={actualizandoMemoria} autoActualizarMemoria={autoActualizarMemoria} escenaActiva={escenaActiva} nuevaEntidad={nuevaEntidad} setNuevaEntidad={setNuevaEntidad} registrarEntidad={registrarEntidad} entidades={entidades} convocarEntidad={convocarEntidad} cargarCronicas={cargarCronicas} cronicas={cronicas} loreTitulo={loreTitulo} setLoreTitulo={setLoreTitulo} loreTexto={loreTexto} setLoreTexto={setLoreTexto} guardarLorebook={guardarLorebook} editarEntidadExistente={editarEntidadExistente} 
+           />
+        </div>
+      )}
+
+      {/* 2. BARRA DE HERRAMIENTAS (Anclada al extremo derecho) */}
+      {escenaActiva && (
+        <div className="w-16 bg-[#0a0a0a] border-l border-slate-800/50 flex flex-col items-center py-6 z-40 shrink-0 justify-between">
+          <div className="flex flex-col gap-4">
+            <button onClick={() => abrirPestaña('memoria')} className={`p-3 rounded-xl transition-all ${panelDerechoAbierto && pestañaDerecha === 'memoria' ? 'bg-sky-900/30 text-sky-400' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-900'}`} title="Estado Actual"><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg></button>
+            <button onClick={() => abrirPestaña('entidades')} className={`p-3 rounded-xl transition-all ${panelDerechoAbierto && pestañaDerecha === 'entidades' ? 'bg-indigo-900/30 text-indigo-400' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-900'}`} title="Entidades (NPCs)"><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg></button>
+            <button onClick={() => abrirPestaña('lore')} className={`p-3 rounded-xl transition-all ${panelDerechoAbierto && pestañaDerecha === 'lore' ? 'bg-amber-900/30 text-amber-400' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-900'}`} title="Lorebook"><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477-4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg></button>
+            <button onClick={() => abrirPestaña('cronicas')} className={`p-3 rounded-xl transition-all ${panelDerechoAbierto && pestañaDerecha === 'cronicas' ? 'bg-emerald-900/30 text-emerald-400' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-900'}`} title="Crónicas"><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg></button>
+          </div>
+          {panelDerechoAbierto && (
+            <button onClick={() => setPanelDerechoAbierto(false)} className="mt-auto p-3 text-slate-500 hover:text-white rounded-xl transition-all" title="Ocultar Panel">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
+            </button>
+          )}
+        </div>
+      )}
+
+      {mostrarAjustes && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-[#0a0a0a]/80 backdrop-blur-sm animate-fade-in">
+          <div className="bg-slate-900 border border-slate-700 p-8 rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto custom-scrollbar relative">
+            <button onClick={() => setMostrarAjustes(false)} className="absolute top-6 right-6 text-slate-400 hover:text-white text-xl">✕</button>
+            <h2 className="text-2xl font-serif text-white mb-6">Ajustes de Aventura</h2>
+            <FormularioConfiguracion />
+            <div className="mt-8 flex justify-end">
+              <button onClick={() => setMostrarAjustes(false)} className="px-6 py-3 bg-white text-slate-900 font-bold rounded-xl hover:bg-slate-200 transition-colors">Guardar y Continuar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

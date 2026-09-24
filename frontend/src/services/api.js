@@ -48,6 +48,18 @@ export const api = {
     body: JSON.stringify(datos) 
   }),
 
+  editarEntidad: async (id, datos) => fetch(`${API_URL}/api/entidades/${id}`, { 
+    method: 'PUT', 
+    headers: { 'Content-Type': 'application/json' }, 
+    body: JSON.stringify(datos) 
+  }).then(r => r.json()),
+
+  extraerEntidades: async (datos) => fetch(`${API_URL}/api/extraer_entidades`, { 
+    method: 'POST', 
+    headers: { 'Content-Type': 'application/json' }, 
+    body: JSON.stringify(datos) 
+  }).then(r => r.json()),
+
   // --- IA Y AGENTES AUXILIARES ---
   configurarDirector: async (datos) => fetch(`${API_URL}/api/director_magico`, { 
     method: 'POST', 
@@ -56,6 +68,12 @@ export const api = {
   }).then(r => r.json()),
   
   sintetizarMemoria: async (datos) => fetch(`${API_URL}/api/sintetizar_memoria`, { 
+    method: 'POST', 
+    headers: { 'Content-Type': 'application/json' }, 
+    body: JSON.stringify(datos) 
+  }).then(r => r.json()),
+
+  consultarOrquestador: async (datos) => fetch(`${API_URL}/api/orquestador`, { 
     method: 'POST', 
     headers: { 'Content-Type': 'application/json' }, 
     body: JSON.stringify(datos) 

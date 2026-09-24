@@ -47,6 +47,14 @@ class SintetizarRequest(BaseModel):
     id_escena: int
     memoria_actual: str
 
+class ExtraerEntidadesRequest(BaseModel):
+    id_escena: int 
+    texto: str
+
+class OrquestadorRequest(BaseModel):
+    id_escena: int
+    mensaje: str
+    personajes_presentes: list[str]
 
 @router.post("/api/chat")
 def chat_con_personaje(req: MensajeTest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -292,3 +300,71 @@ async def leer_tarjeta_tavern(archivo: UploadFile = File(...)):
         if 'ruta_temporal' in locals() and os.path.exists(ruta_temporal):
             os.remove(ruta_temporal)
         return {"error": f"Error al procesar la tarjeta: {str(e)}"}
+
+@router.post("/api/extraer_entidades")
+def extraer_entidades_magicas(req: ExtraerEntidadesRequest, db: Session = Depends(get_db)):
+    llm = get_llm()
+    prompt = (
+        "Actúa como un creador de perfiles enciclopédicos para un juego de rol. "
+        "Lee el siguiente texto y extrae o inventa perfiles MUY detallados para los personajes, lugares u objetos mencionados. "
+        "Incluye edad, universo, apariencia, personalidad o historia si es aplicable. "
+        "Devuelve ÚNICAMENTE un JSON puro y válido con esta estructura exacta: "
+        '{"entidades": [{"nombre": "Ej: Batman", "tipo": "Personaje/Lugar/Objeto", "descripcion": "..."}]} '
+        f"Texto del usuario: {req.texto}"
+    )
+    
+    try:
+        res = llm.invoke(prompt)
+        datos = json.loads(res.content.replace("```json", "").replace("```", "").strip())
+        
+        entidades_creadas = []
+        for ent in datos.get("entidades", []):
+            nueva_entidad = models.Entidad(
+                id_escena=req.id_escena, 
+                nombre=ent["nombre"], 
+                tipo=ent["tipo"], 
+                descripcion=ent["descripcion"]
+            )
+            db.add(nueva_entidad)
+            entidades_creadas.append(ent["nombre"])
+            
+        db.commit()
+        return {"estado": "éxito", "creadas": entidades_creadas}
+    except Exception as e:
+        return {"error": str(e)}  
+
+@router.post("/api/orquestador")
+def orquestador_party(req: OrquestadorRequest, db: Session = Depends(get_db)):
+    # Obtenemos un poco de contexto reciente para que el Orquestador sepa de qué hablan
+    mensajes = db.query(models.Mensaje).filter(models.Mensaje.id_escena == req.id_escena).order_by(models.Mensaje.id.desc()).limit(5).all()
+    mensajes.reverse()
+    historial = "\n".join([f"{'Jugador' if m.id_emisor==0 else 'IA'}: {m.contenido}" for m in mensajes])
+    
+    llm = get_llm()
+    prompt = f"""
+    Actúa como el Orquestador de un chat grupal de rol.
+    Personajes presentes en la sala: {', '.join(req.personajes_presentes)}.
+    
+    Últimos mensajes de la conversación:
+    {historial}
+    
+    Nuevo mensaje del jugador: "{req.mensaje}"
+    
+    TÚ TRABAJO: Basado en el último mensaje y el contexto, decide lógicamente quién de los personajes presentes DEBE responder.
+    - Si el jugador nombra a alguien directamente, elige a ese.
+    - Si es una pregunta general, elige al personaje cuya personalidad encaje mejor para hablar primero.
+    
+    Devuelve ÚNICAMENTE un JSON puro y válido con la clave "siguiente_turno" y el nombre exacto del personaje elegido.
+    Ejemplo: {{"siguiente_turno": "{req.personajes_presentes[0]}"}}
+    """
+    
+    try:
+        res = llm.invoke(prompt)
+        # Limpiamos posibles formatos de markdown que Ollama a veces añade
+        datos = json.loads(res.content.replace("```json", "").replace("```", "").strip())
+        return datos
+    except Exception as e:
+        # Fallback de seguridad: si la IA se confunde, le damos el turno al primero de la lista
+        if req.personajes_presentes:
+            return {"siguiente_turno": req.personajes_presentes[0], "aviso": "fallback"}
+        return {"error": str(e)}  

@@ -5,10 +5,8 @@ from app.core.config import settings
 
 def get_llm():
     return ChatOllama(
-        model=settings.OLLAMA_MODEL, 
-        temperature=settings.OLLAMA_TEMPERATURE, 
-        num_ctx=settings.OLLAMA_CTX_SIZE, 
-        repeat_penalty=settings.OLLAMA_REPEAT_PENALTY
+        base_url=settings.ollama_base_url, 
+        model=settings.ollama_model,
     )
 
 class PersonajeChain:

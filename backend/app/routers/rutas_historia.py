@@ -26,6 +26,10 @@ class EntidadCreate(BaseModel):
     nombre: str
     tipo: str
     descripcion: str
+class EntidadUpdate(BaseModel):
+    nombre: str
+    tipo: str
+    descripcion: str
 class LoreRequest(BaseModel):
     id_escena: int
     id_documento: str
@@ -112,6 +116,18 @@ def crear_entidad(req: EntidadCreate, db: Session = Depends(get_db)):
 def obtener_entidades(id_escena: int, db: Session = Depends(get_db)):
     entidades = db.query(models.Entidad).filter(models.Entidad.id_escena == id_escena).all()
     return [{"id": e.id, "nombre": e.nombre, "tipo": e.tipo, "descripcion": e.descripcion} for e in entidades]
+
+@router.put("/api/entidades/{id_entidad}")
+def editar_entidad(id_entidad: int, req: EntidadUpdate, db: Session = Depends(get_db)):
+    entidad = db.query(models.Entidad).filter(models.Entidad.id == id_entidad).first()
+    if not entidad:
+        raise HTTPException(status_code=404, detail="Entidad no encontrada")
+    
+    entidad.nombre = req.nombre
+    entidad.tipo = req.tipo
+    entidad.descripcion = req.descripcion
+    db.commit()
+    return {"estado": "éxito"}
 
 @router.post("/api/lore")
 def guardar_lore(req: LoreRequest):

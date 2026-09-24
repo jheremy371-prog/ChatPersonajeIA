@@ -1,8 +1,16 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Table
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from app.database.database import Base
+
+# 👇 NUEVA TABLA PUENTE PARA EL SISTEMA DE PARTY MULTI-AGENTE 👇
+escena_personaje_asociacion = Table(
+    'escena_personaje',
+    Base.metadata,
+    Column('id_escena', Integer, ForeignKey('escenas.id', ondelete="CASCADE"), primary_key=True),
+    Column('id_personaje', Integer, ForeignKey('personajes.id', ondelete="CASCADE"), primary_key=True)
+)
 
 class Personaje(Base):
     __tablename__ = "personajes"
@@ -19,7 +27,6 @@ class Personaje(Base):
     # Relación: Un personaje puede tener muchas escenas/partidas a la vez
     escenas = relationship("Escena", back_populates="personaje", cascade="all, delete-orphan")
 
-# Reemplaza SOLO la clase Escena en tu models.py con esta:
 
 class Escena(Base):
     __tablename__ = "escenas"
@@ -36,11 +43,15 @@ class Escena(Base):
     escena_padre_id = Column(Integer, ForeignKey("escenas.id"), nullable=True)
     mensaje_bifurcacion_id = Column(Integer, ForeignKey("mensajes.id"), nullable=True)
 
-    # Relaciones
+    # Relaciones base
     personaje = relationship("Personaje", back_populates="escenas")
     mensajes = relationship("Mensaje", back_populates="escena", cascade="all, delete-orphan", foreign_keys="[Mensaje.id_escena]")
     cronicas = relationship("CronicaHistoria", back_populates="escena", cascade="all, delete-orphan")
     entidades = relationship("Entidad", back_populates="escena", cascade="all, delete-orphan")
+
+    # 👇 NUEVA RELACIÓN MULTI-AGENTE (LA PARTY) 👇
+    party = relationship("Personaje", secondary=escena_personaje_asociacion, backref="escenas_activas")
+
 
 class Mensaje(Base):
     __tablename__ = "mensajes"
@@ -49,7 +60,8 @@ class Mensaje(Base):
     id_emisor = Column(Integer, nullable=False) 
     contenido = Column(String, nullable=False)
     fecha_hora = Column(DateTime(timezone=True), server_default=func.now())
-    escena = relationship("Escena", back_populates="mensajes")
+    escena = relationship("Escena", back_populates="mensajes", foreign_keys=[id_escena])
+
 
 class CronicaHistoria(Base):
     __tablename__ = "cronicas_historia"
@@ -59,6 +71,7 @@ class CronicaHistoria(Base):
     contenido_narrativo = Column(String, nullable=False)
     fecha_generacion = Column(DateTime(timezone=True), server_default=func.now())
     escena = relationship("Escena", back_populates="cronicas")
+
 
 class Entidad(Base):
     __tablename__ = "entidades"
